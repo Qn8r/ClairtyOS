@@ -22,6 +22,6 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "LivingLifeMMO"
+rootProject.name = "ClarityOS"
 include(":app")
  
