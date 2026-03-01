@@ -1,0 +1,949 @@
+package com.example.questify
+
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.GregorianCalendar
+import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.TimeUnit
+import kotlin.random.Random
+
+/* ===================== LOGIC ===================== */
+
+val UTC: TimeZone = TimeZone.getTimeZone("UTC")
+const val REAL_DAILY_LIFE_PACKAGE_ID: String = "real_daily_life_v1"
+const val JOURNEY_BALANCE_PACKAGE_ID: String = "journey_balance_v1"
+const val REAL_WORLD_MOMENTUM_PACKAGE_ID: String = "real_world_momentum_v1"
+const val Routine_FEATURE_TEST_PACKAGE_ID: String = "Routine_feature_test_v1"
+
+private fun isArabicLanguage(lang: String): Boolean {
+    return AppLanguage.resolve(lang) == AppLanguage.AR
+}
+
+fun epochDayNow(): Long {
+    val cal = Calendar.getInstance()
+    val y = cal.get(Calendar.YEAR)
+    val m = cal.get(Calendar.MONTH) + 1
+    val d = cal.get(Calendar.DAY_OF_MONTH)
+    return epochDayFromYmd(y, m, d)
+}
+
+fun epochDayNowAtHour(resetHour: Int): Long {
+    val cal = Calendar.getInstance()
+    cal.add(Calendar.HOUR_OF_DAY, -resetHour.coerceIn(0, 23))
+    val y = cal.get(Calendar.YEAR)
+    val m = cal.get(Calendar.MONTH) + 1
+    val d = cal.get(Calendar.DAY_OF_MONTH)
+    return epochDayFromYmd(y, m, d)
+}
+
+fun epochDayFromYmd(year: Int, month1to12: Int, day: Int): Long {
+    val cal = GregorianCalendar(UTC)
+    cal.clear()
+    cal.set(year, month1to12 - 1, day, 0, 0, 0)
+    return TimeUnit.MILLISECONDS.toDays(cal.timeInMillis)
+}
+
+fun ymdFromEpoch(epochDay: Long): Triple<Int, Int, Int> {
+    val cal = GregorianCalendar(UTC)
+    cal.timeInMillis = TimeUnit.DAYS.toMillis(epochDay)
+    return Triple(cal.get(Calendar.YEAR), cal.get(Calendar.MONTH) + 1, cal.get(Calendar.DAY_OF_MONTH))
+}
+
+fun todayYmd(): Pair<Int, Int> {
+    val cal = Calendar.getInstance()
+    return cal.get(Calendar.YEAR) to (cal.get(Calendar.MONTH) + 1)
+}
+
+fun dayOfMonthFromEpoch(epochDay: Long): Int = ymdFromEpoch(epochDay).third
+
+fun monthTitle(year: Int, month: Int): String {
+    val cal = GregorianCalendar(UTC)
+    cal.clear()
+    cal.set(year, month - 1, 1, 0, 0, 0)
+    val fmt = SimpleDateFormat("MMMM yyyy", Locale.getDefault())
+    fmt.timeZone = UTC
+    return fmt.format(cal.time)
+}
+
+fun prevMonth(year: Int, month: Int): Pair<Int, Int> {
+    val cal = GregorianCalendar(UTC)
+    cal.clear()
+    cal.set(year, month - 1, 1, 0, 0, 0)
+    cal.add(Calendar.MONTH, -1)
+    return cal.get(Calendar.YEAR) to (cal.get(Calendar.MONTH) + 1)
+}
+
+fun nextMonth(year: Int, month: Int): Pair<Int, Int> {
+    val cal = GregorianCalendar(UTC)
+    cal.clear()
+    cal.set(year, month - 1, 1, 0, 0, 0)
+    cal.add(Calendar.MONTH, 1)
+    return cal.get(Calendar.YEAR) to (cal.get(Calendar.MONTH) + 1)
+}
+
+fun buildMonthGrid(year: Int, month: Int): List<Long?> {
+    val cal = GregorianCalendar(UTC)
+    cal.clear()
+    cal.set(year, month - 1, 1, 0, 0, 0)
+    val dow = cal.get(Calendar.DAY_OF_WEEK)
+    val offset = dow - Calendar.SUNDAY
+    val daysInMonth = cal.getActualMaximum(Calendar.DAY_OF_MONTH)
+    val out = MutableList<Long?>(42) { null }
+    var idx = offset
+    for (d in 1..daysInMonth) { out[idx] = epochDayFromYmd(year, month, d); idx++ }
+    return out
+}
+
+fun formatEpochDayFull(epochDay: Long): String {
+    val (y, m, d) = ymdFromEpoch(epochDay)
+    val cal = GregorianCalendar(UTC)
+    cal.clear()
+    cal.set(y, m - 1, d, 0, 0, 0)
+    val fmt = SimpleDateFormat("EEE, MMM d, yyyy", Locale.getDefault())
+    fmt.timeZone = UTC
+    return fmt.format(cal.time)
+}
+
+fun formatEpochDay(epochDay: Long, lang: String = "en"): String {
+    val today = epochDayNow()
+    return when (epochDay) {
+        today -> localize(lang, "Today", AppLanguage.AR to "اليوم")
+        today - 1L -> localize(lang, "Yesterday", AppLanguage.AR to "أمس")
+        else -> {
+            val (y, m, d) = ymdFromEpoch(epochDay)
+            val cal = GregorianCalendar(UTC)
+            cal.clear()
+            cal.set(y, m - 1, d, 0, 0, 0)
+            val fmt = SimpleDateFormat("MMM d", Locale.getDefault())
+            fmt.timeZone = UTC
+            fmt.format(cal.time)
+        }
+    }
+}
+
+/* ===================== MMO MECHANICS ===================== */
+
+/**
+ * NPC Logic: Random dialogue selector.
+ */
+fun getNpcDialogue(npc: Npc): String {
+    if (npc.dialogue.isEmpty()) return "..."
+    return npc.dialogue.random()
+}
+
+/* ===================== INVENTORY & SHOP ===================== */
+
+const val MAX_INVENTORY_SLOTS = 20
+
+fun canAddToInventory(currentInventory: List<InventoryItem>): Boolean {
+    val totalOwned = currentInventory.sumOf { it.ownedCount }
+    return totalOwned < MAX_INVENTORY_SLOTS
+}
+
+fun customTemplatesToRoutineTemplates(customs: List<CustomTemplate>): List<RoutineTemplate> {
+    return customs.map {
+        // Now passing the packageId correctly!
+        RoutineTemplate(it.category, it.title, it.icon, it.target, it.isPinned, it.imageUri, it.packageId, it.objectiveType, it.targetSeconds, it.healthMetric, it.healthAggregation)
+    }
+}
+
+val categoryOrder = listOf(RoutineCategory.FITNESS, RoutineCategory.STUDY, RoutineCategory.HYDRATION, RoutineCategory.DISCIPLINE, RoutineCategory.MIND)
+
+fun stableRoutineId(cat: RoutineCategory, t: RoutineTemplate): Int {
+    val key = "${cat.name}|${t.title}|${t.icon}|${t.target}|${t.objectiveType.name}|${t.targetSeconds ?: 0}|${t.healthMetric.orEmpty()}|${t.healthAggregation.orEmpty()}|${t.packageId}|${t.imageUri.orEmpty()}"
+    val bytes = java.security.MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
+    return java.nio.ByteBuffer.wrap(bytes, 0, 4).int and 0x7fffffff
+}
+
+private fun hashedRoutineId(key: String): Int {
+    val bytes = java.security.MessageDigest.getInstance("SHA-256").digest(key.toByteArray(Charsets.UTF_8))
+    return java.nio.ByteBuffer.wrap(bytes, 0, 4).int and 0x7fffffff
+}
+
+private fun RoutineKeyForCollision(routine: Routine, salt: Int): String {
+    return "${routine.category.name}|${routine.title}|${routine.icon}|${routine.target}|${routine.objectiveType.name}|${routine.targetSeconds ?: 0}|${routine.healthMetric.orEmpty()}|${routine.healthAggregation.orEmpty()}|${routine.packageId}|${routine.imageUri.orEmpty()}|$salt"
+}
+
+fun ensureUniqueRoutineIds(list: List<Routine>): List<Routine> {
+    if (list.isEmpty()) return list
+    val usedIds = mutableSetOf<Int>()
+    var collisions = 0
+    val result = list.map { routine ->
+        if (usedIds.add(routine.id)) {
+            routine
+        } else {
+            collisions++
+            var salt = 1
+            var nextId: Int
+            do {
+                nextId = hashedRoutineId(RoutineKeyForCollision(routine, salt))
+                salt++
+            } while (!usedIds.add(nextId))
+            routine.copy(id = nextId)
+        }
+    }
+    if (collisions > 0) {
+        AppLog.w("Resolved $collisions duplicate Routine id collision(s)")
+    }
+    return result
+}
+
+fun generateDailyRoutines(seed: Long, pool: List<RoutineTemplate>, desiredCount: Int = 5): List<Routine> {
+    if (pool.isEmpty()) return emptyList()
+    val pinned = pool.filter { it.isPinned }
+    val others = pool.filter { !it.isPinned }
+    val countNeeded = (desiredCount.coerceIn(3, 10) - pinned.size).coerceAtLeast(0)
+
+    val random = java.util.Random(seed)
+    val randomSelection = others.shuffled(random).take(countNeeded)
+
+    return ensureUniqueRoutineIds((pinned + randomSelection).map { t ->
+        Routine(
+            id = stableRoutineId(t.category, t),
+            title = t.title,
+            icon = t.icon,
+            category = t.category,
+            target = t.target,
+            imageUri = t.imageUri,
+            packageId = t.packageId,
+            objectiveType = t.objectiveType,
+            targetSeconds = t.targetSeconds,
+            healthMetric = t.healthMetric,
+            healthAggregation = t.healthAggregation
+        )
+    })
+}
+fun refreshKeepingCompleted(
+    current: List<Routine>,
+    seed: Long,
+    pool: List<RoutineTemplate>,
+    desiredCount: Int = 5
+): List<Routine> {
+    val rng = Random(seed)
+    val templates = pool
+
+    // 1. Identify Pinned routines in the Pool
+    val pinnedTemplates = templates.filter { it.isPinned }
+
+    // 2. Identify Current Pinned routines (We must keep these!)
+    val currentPinnedIds = current.filter { q ->
+        // Find if the current Routine matches a pinned template title
+        pinnedTemplates.any { it.title == q.title }
+    }
+
+    val currentTitles = current.map { it.title }.toSet()
+
+    // 3. Generate replacements for the non-pinned slots (category-balanced first pass).
+    val replacements = categoryOrder.mapNotNull { cat ->
+        val existingPinned = currentPinnedIds.firstOrNull { it.category == cat }
+        if (existingPinned != null) return@mapNotNull existingPinned
+
+        val existingCompleted = current.firstOrNull { it.category == cat && it.completed && !currentPinnedIds.contains(it) }
+        if (existingCompleted != null) return@mapNotNull existingCompleted
+
+        val catPool = templates.filter { it.category == cat && !it.isPinned }
+        if (catPool.isEmpty()) return@mapNotNull null
+
+        val candidates = catPool.filter { !currentTitles.contains(it.title) }
+        val finalPool = if (candidates.isNotEmpty()) candidates else catPool
+
+        val t = finalPool[rng.nextInt(finalPool.size)]
+        Routine(stableRoutineId(cat, t), t.title, t.icon, t.category, t.target, 0, false, t.imageUri, t.packageId, t.objectiveType, t.targetSeconds, t.healthMetric, t.healthAggregation)
+    }
+
+    val targetCount = desiredCount.coerceIn(3, 10)
+    val seeded = (currentPinnedIds + replacements).distinctBy { it.id }.toMutableList()
+    if (seeded.size >= targetCount) return ensureUniqueRoutineIds(seeded.take(targetCount))
+
+    val usedIds = seeded.map { it.id }.toMutableSet()
+    val extraTemplates = templates.shuffled(rng)
+    for (template in extraTemplates) {
+        val routine = Routine(
+            id = stableRoutineId(template.category, template),
+            title = template.title,
+            icon = template.icon,
+            category = template.category,
+            target = template.target,
+            currentProgress = 0,
+            completed = false,
+            imageUri = template.imageUri,
+            packageId = template.packageId,
+            objectiveType = template.objectiveType,
+            targetSeconds = template.targetSeconds,
+            healthMetric = template.healthMetric,
+            healthAggregation = template.healthAggregation
+        )
+        if (usedIds.add(routine.id)) {
+            seeded += routine
+            if (seeded.size >= targetCount) break
+        }
+    }
+    return ensureUniqueRoutineIds(seeded.take(targetCount))
+}
+
+fun getInitialDefaultPool(lang: String = "en"): List<CustomTemplate> {
+    val template = getJourneyBalanceTemplate(lang)
+    return template.dailyRoutines.map { routine ->
+        CustomTemplate(
+            id = java.util.UUID.randomUUID().toString(),
+            category = routine.category,
+            title = routine.title,
+            icon = routine.icon,
+            target = routine.target,
+            isPinned = routine.isPinned,
+            imageUri = routine.imageUri,
+            packageId = template.packageId,
+            isActive = true,
+            objectiveType = routine.objectiveType,
+            targetSeconds = routine.targetSeconds,
+            healthMetric = routine.healthMetric,
+            healthAggregation = routine.healthAggregation
+        )
+    }
+}
+fun getInitialMilestones(lang: String = "en"): List<Milestone> {
+    return getJourneyBalanceTemplate(lang).milestones
+}
+
+fun getLimitBreakerTemplate(lang: String = "en"): GameTemplate {
+    val pkg = "saitama_v1"
+    val isAr = isArabicLanguage(lang)
+
+    // 1. Saitama Daily Routine
+    val daily = if (isAr) {
+        listOf(
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "10 تمارين ضغط", "💪", 10, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "10 تمارين بطن", "🔥", 10, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "10 تمارين قرفصاء", "🦵", 10, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "جري 1 كم", "🏃", 15, 1, false, null, pkg),
+
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "50 تمرين ضغط", "💪", 50, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "50 تمرين بطن", "🔥", 50, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "50 تمرين قرفصاء", "🦵", 50, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "جري 5 كم", "🏃", 75, 1, false, null, pkg),
+
+            RoutineTemplate(RoutineCategory.FITNESS, 5, "100 تمرين ضغط", "💥", 150, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 5, "100 تمرين بطن", "🔥", 150, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 5, "100 تمرين قرفصاء", "🦵", 150, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 5, "جري 10 كم", "🏃", 250, 1, true, null, pkg),
+
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 5, "لا مكيف في الصيف", "🥵", 100, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 5, "لا مدفأة في الشتاء", "🥶", 100, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.HYDRATION, 2, "أكل موزة", "🍌", 20, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.MIND, 4, "قراءة مانجا البطل", "📚", 40, 1, false, null, pkg)
+        )
+    } else {
+        listOf(
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "10 Push-ups", "💪", 10, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "10 Sit-ups", "🔥", 10, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "10 Squats", "🦵", 10, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "1km Run", "🏃", 15, 1, false, null, pkg),
+
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "50 Push-ups", "💪", 50, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "50 Sit-ups", "🔥", 50, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "50 Squats", "🦵", 50, 1, false, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "5km Run", "🏃", 75, 1, false, null, pkg),
+
+            RoutineTemplate(RoutineCategory.FITNESS, 5, "100 Push-ups", "💥", 150, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 5, "100 Sit-ups", "🔥", 150, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 5, "100 Squats", "🦵", 150, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 5, "10km Run", "🏃", 250, 1, true, null, pkg),
+
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 5, "No AC in Summer", "🥵", 100, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 5, "No Heater in Winter", "🥶", 100, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.HYDRATION, 2, "Eat a Banana", "🍌", 20, 1, true, null, pkg),
+            RoutineTemplate(RoutineCategory.MIND, 4, "Read Hero Manga", "📚", 40, 1, false, null, pkg)
+        )
+    }
+
+    // 2. Saitama Storyline
+    val mq1 = if (isAr) {
+        Milestone("hero_1", "الفئة C: مساعدة المدنيين", "ساعد غريبًا في مهمة بدنية.", 300, listOf("مسح المنطقة", "عرض المساعدة", "رفع جسم ثقيل"), packageId = pkg)
+    } else {
+        Milestone("hero_1", "C-Class: Civilian Assist", "Help a stranger with a physical task.", 300, listOf("Scan area", "Offer help", "Lift heavy object"), packageId = pkg)
+    }
+    val mq2 = if (isAr) {
+        Milestone("hero_2", "الفئة B: عشر النقابة", "تبرع للجمعيات الخيرية أو اشترِ وجبة لشخص ما.", 600, listOf("البحث عن جمعية", "التبرع"), prerequisiteId = "hero_1", packageId = pkg)
+    } else {
+        Milestone("hero_2", "B-Class: Guild Tithe", "Donate to charity or buy someone a meal.", 600, listOf("Find charity", "Donate"), prerequisiteId = "hero_1", packageId = pkg)
+    }
+    val mq3 = if (isAr) {
+        Milestone("hero_3", "الفئة A: جناح الشفاء", "قم بزيارة أو اتصل بصديق/أحد أفراد الأسرة المريض.", 1000, listOf("اتصال", "تقديم التشجيع"), prerequisiteId = "hero_2", packageId = pkg)
+    } else {
+        Milestone("hero_3", "A-Class: Healing Ward", "Visit or call a sick friend/family member.", 1000, listOf("Call contact", "Give encouragement"), prerequisiteId = "hero_2", packageId = pkg)
+    }
+    val mq4 = if (isAr) {
+        Milestone("hero_4", "الفئة S: عمل العمالقة", "ساعد شخصًا في نقل منزله أو القيام بعمل شاق.", 3000, listOf("الوصول", "العمل بجد"), prerequisiteId = "hero_3", packageId = pkg)
+    } else {
+        Milestone("hero_4", "S-Class: Titan Labor", "Help someone move house or do heavy labor.", 3000, listOf("Arrive", "Work hard"), prerequisiteId = "hero_3", packageId = pkg)
+    }
+
+    return GameTemplate(
+        templateName = if (isAr) "كاسر الحدود (سايتاما)" else "Limit Breaker (Saitama)",
+        appTheme = AppTheme.DEFAULT,
+        dailyRoutines = daily,
+        milestones = listOf(mq1, mq2, mq3, mq4),
+        catalogItems = getDefaultShopItems(lang),
+        packageId = pkg,
+        templateSettings = TemplateSettings(),
+        isPremium = true
+    )
+}
+
+fun generateDailyRoutinesAdaptive(
+    seed: Long,
+    pool: List<RoutineTemplate>,
+    history: Map<Long, HistoryEntry>,
+    recentFailedTitles: Set<String>,
+    completedRoutines: List<Routine> = emptyList(),
+    desiredCount: Int = 5
+): List<Routine> {
+    if (pool.isEmpty()) return emptyList()
+    val filtered = pool.filter { !recentFailedTitles.contains(it.title) }
+    val fallback = if (filtered.isEmpty()) pool else filtered
+    val base = generateDailyRoutines(seed = seed, pool = fallback, desiredCount = desiredCount)
+    val result = if (base.size == desiredCount.coerceIn(3, 10)) base else generateDailyRoutines(seed = seed, pool = pool, desiredCount = desiredCount)
+    return ensureUniqueRoutineIds(result)
+}
+
+fun bestWeekdayByCompletion(history: Map<Long, HistoryEntry>, lang: String = "en"): String {
+    if (history.isEmpty()) return localize(lang, "N/A", AppLanguage.AR to "غير متاح")
+    val buckets = mutableMapOf<Int, MutableList<Float>>()
+    history.forEach { (day, entry) ->
+        val cal = GregorianCalendar(UTC)
+        cal.timeInMillis = TimeUnit.DAYS.toMillis(day)
+        val dow = cal.get(Calendar.DAY_OF_WEEK)
+        val ratio = entry.done.toFloat() / entry.total.coerceAtLeast(1).toFloat()
+        buckets.getOrPut(dow) { mutableListOf() }.add(ratio)
+    }
+    val best = buckets.maxByOrNull { (_, values) -> values.average() }?.key
+        ?: return localize(lang, "N/A", AppLanguage.AR to "غير متاح")
+    return when (best) {
+        Calendar.MONDAY -> localize(lang, "Monday", AppLanguage.AR to "الإثنين")
+        Calendar.TUESDAY -> localize(lang, "Tuesday", AppLanguage.AR to "الثلاثاء")
+        Calendar.WEDNESDAY -> localize(lang, "Wednesday", AppLanguage.AR to "الأربعاء")
+        Calendar.THURSDAY -> localize(lang, "Thursday", AppLanguage.AR to "الخميس")
+        Calendar.FRIDAY -> localize(lang, "Friday", AppLanguage.AR to "الجمعة")
+        Calendar.SATURDAY -> localize(lang, "Saturday", AppLanguage.AR to "السبت")
+        else -> localize(lang, "Sunday", AppLanguage.AR to "الأحد")
+    }
+}
+
+fun getJourneyBalanceTemplate(lang: String = "en"): GameTemplate {
+    val pkg = JOURNEY_BALANCE_PACKAGE_ID
+    return GameTemplate(
+        templateName = localize(lang, "Journey & Balance Blueprint", AppLanguage.AR to "مخطط الرحلة والتوازن"),
+        appTheme = AppTheme.DEFAULT,
+        dailyRoutines = getRealDailyLifePool(pkg, lang),
+        milestones = getRealDailyLifeMilestones(pkg, lang),
+        catalogItems = getDefaultShopItems(lang),
+        packageId = pkg,
+        templateSettings = TemplateSettings()
+    )
+}
+
+fun getDefaultGameTemplate(lang: String = "en"): GameTemplate {
+    return getJourneyBalanceTemplate(lang)
+}
+
+fun getEmptyStarterTemplate(lang: String = "en"): GameTemplate {
+    val pkg = "empty_pack"
+    return GameTemplate(
+        templateName = localize(lang, "Empty Start", AppLanguage.AR to "بداية فارغة"),
+        appTheme = AppTheme.DEFAULT,
+        dailyRoutines = emptyList(),
+        milestones = emptyList(),
+        catalogItems = emptyList(),
+        packageId = pkg,
+        templateSettings = TemplateSettings()
+    )
+}
+
+private data class RealLifeSeed(
+    val title: String,
+    val titleAr: String,
+    val icon: String,
+    val baseTarget: Int = 1,
+    val baseXp: Int = 16
+)
+
+private fun expandRealLifeSeeds(
+    category: RoutineCategory,
+    packageId: String,
+    seeds: List<RealLifeSeed>,
+    lang: String = "en"
+): List<RoutineTemplate> {
+    return seeds.map { seed ->
+        RoutineTemplate(
+            category = category,
+            title = localize(lang, seed.title, AppLanguage.AR to seed.titleAr),
+            icon = seed.icon,
+            target = seed.baseTarget.coerceAtLeast(1),
+            isPinned = false,
+            imageUri = null,
+            packageId = packageId
+        )
+    }
+}
+
+private fun getRealDailyLifePool(packageId: String, lang: String = "en"): List<RoutineTemplate> {
+    val fitnessSeeds = listOf(
+        RealLifeSeed("Walk 1 km", "مشى 1 كم", "🚶", 1, 16),
+        RealLifeSeed("Mobility stretch Routine", "روتين تمدد الحركة", "🤸", 1, 15),
+        RealLifeSeed("Bodyweight circuit", "دائرة وزن الجسم", "🏋️", 1, 18),
+        RealLifeSeed("Climb stairs intentionally", "صعود الدرج عمداً", "🪜", 1, 16),
+        RealLifeSeed("Core stability session", "جلسة استقرار الجذع", "🧱", 1, 18),
+        RealLifeSeed("Posture and back care", "العناية بالقوام والظهر", "🧍", 1, 16),
+        RealLifeSeed("Cardio interval block", "كتلة تمارين الكارديو", "❤️", 1, 20),
+        RealLifeSeed("Leg strength Routine", "روتين قوة الساق", "🦵", 1, 18),
+        RealLifeSeed("Upper body push session", "جلسة دفع الجزء العلوي", "💪", 1, 18),
+        RealLifeSeed("Recovery walk after meal", "مشية استشفاء بعد الوجبة", "🌤️", 1, 14),
+        RealLifeSeed("Desk break movement set", "مجموعة حركة استراحة المكتب", "🖥️", 2, 14),
+        RealLifeSeed("Breath + movement reset", "إعادة ضبط التنفس والحركة", "🌬️", 2, 14),
+        RealLifeSeed("Hip opening Routine", "روتين فتح الحوض", "🧘", 1, 15),
+        RealLifeSeed("Balance drill practice", "ممارسة تمارين التوازن", "⚖️", 2, 16),
+        RealLifeSeed("Outdoor sunlight session", "جلسة ضوء الشمس في الهواء الطلق", "☀️", 1, 14),
+        RealLifeSeed("Jog or brisk walk", "جري أو مشي سريع", "🏃", 1, 19),
+        RealLifeSeed("Push-up quality reps", "تكرارات ضغط عالية الجودة", "🔥", 6, 20),
+        RealLifeSeed("Squat quality reps", "تكرارات قرفصاء عالية الجودة", "🦿", 8, 20),
+        RealLifeSeed("Low-impact cardio", "كارديو منخفض التأثير", "🚴", 1, 18),
+        RealLifeSeed("Evening unwind stretch", "تمدد الاسترخاء المسائي", "🌙", 1, 14)
+    )
+    val studySeeds = listOf(
+        RealLifeSeed("Deep work block", "كتلة عمل عميق", "🧠", 1, 20),
+        RealLifeSeed("Read non-fiction pages", "قراءة صفحات غير خيالية", "📚", 12, 16),
+        RealLifeSeed("Skill practice session", "جلسة ممارسة مهارة", "🛠️", 1, 20),
+        RealLifeSeed("Write project notes", "كتابة ملاحظات المشروع", "📝", 1, 15),
+        RealLifeSeed("Plan next learning goal", "تخطيط هدف التعلم القادم", "🎯", 1, 14),
+        RealLifeSeed("Review flashcards", "مراجعة بطاقات تعليمية", "🃏", 20, 17),
+        RealLifeSeed("Language practice", "ممارسة اللغة", "🗣️", 1, 18),
+        RealLifeSeed("Career learning module", "وحدة تعلم وظيفي", "💼", 1, 20),
+        RealLifeSeed("Budget learning session", "جلسة تعلم الميزانية", "📊", 1, 16),
+        RealLifeSeed("Research life admin topic", "البحث في موضوع إداري حياتي", "🔎", 1, 15),
+        RealLifeSeed("Summarize an article", "تلخيص مقال", "📰", 1, 15),
+        RealLifeSeed("Practice focused typing", "ممارسة الكتابة المركزة", "⌨️", 1, 15),
+        RealLifeSeed("Organize study materials", "تنظيم مواد الدراسة", "🗂️", 1, 14),
+        RealLifeSeed("Problem-solving drills", "تمارين حل المشكلات", "🧩", 1, 18),
+        RealLifeSeed("Learn from a lecture", "التعلم من محاضرة", "🎓", 1, 17),
+        RealLifeSeed("Review yesterday notes", "مراجعة ملاحظات الأمس", "📒", 1, 15),
+        RealLifeSeed("Create a mini project", "إنشاء مشروع صغير", "🧪", 1, 20),
+        RealLifeSeed("Document wins and gaps", "توثيق الإنجازات والفجوات", "✅", 1, 14),
+        RealLifeSeed("Practice communication skill", "ممارسة مهارة التواصل", "🎤", 1, 17),
+        RealLifeSeed("Study with no distractions", "الدراسة بدون تشتيت", "📵", 1, 19)
+    )
+    val hydrationSeeds = listOf(
+        RealLifeSeed("Drink 3 cups of water", "شرب 3 أكواب ماء", "💧", 3, 12),
+        RealLifeSeed("Finish 2 water bottles", "إنهاء زجاجتي ماء", "🫗", 2, 14),
+        RealLifeSeed("Hydrate before each meal", "شرب الماء قبل كل وجبة", "🥤", 3, 14),
+        RealLifeSeed("Eat fruit serving", "تناول حصة فاكهة", "🍎", 1, 12),
+        RealLifeSeed("Eat protein-focused meal", "تناول وجبة غنية بالبروتين", "🥚", 1, 15),
+        RealLifeSeed("Add vegetables to meal", "إضافة خضروات للوجبة", "🥦", 1, 13),
+        RealLifeSeed("Avoid sugary drinks today", "تجنب المشروبات السكرية اليوم", "🚫", 1, 15),
+        RealLifeSeed("Make healthy lunch choice", "اختيار غداء صحي", "🥗", 1, 14),
+        RealLifeSeed("Track water intake", "تتبع كمية شرب الماء", "📏", 1, 13),
+        RealLifeSeed("Prepare water for tomorrow", "تحضير الماء للغد", "🧊", 1, 12),
+        RealLifeSeed("Drink tea without sugar", "شرب شاي بدون سكر", "🍵", 1, 12),
+        RealLifeSeed("No late-night heavy snack", "لا وجبات ثقيلة في وقت متأخر", "🌜", 1, 14),
+        RealLifeSeed("Balanced breakfast", "إفطار متوازن", "🍳", 1, 14),
+        RealLifeSeed("Mindful eating pace", "وتيرة أكل واعية", "⏱️", 1, 13),
+        RealLifeSeed("Limit processed snack", "الحد من الوجبات الخفيفة المصنعة", "📉", 1, 15),
+        RealLifeSeed("Carry water when outside", "حمل الماء عند الخروج", "🎒", 1, 12),
+        RealLifeSeed("Refill bottle proactively", "إعادة ملء الزجاجة بشكل استباقي", "🚰", 2, 13),
+        RealLifeSeed("Electrolyte-friendly hydration", "ترطيب غني بالإلكتروليتات", "⚡", 1, 14),
+        RealLifeSeed("Healthy dinner portion", "حصة عشاء صحية", "🍲", 1, 14),
+        RealLifeSeed("Daily nutrition check-in", "تسجيل التغذية اليومي", "📋", 1, 12)
+    )
+    val disciplineSeeds = listOf(
+        RealLifeSeed("Make your bed", "ترتيب سريرك", "🛏️", 1, 12),
+        RealLifeSeed("10-minute room reset", "إعادة ضبط الغرفة في 10 دقائق", "🧹", 1, 14),
+        RealLifeSeed("Clear sink and dishes", "تنظيف الحوض والأطباق", "🍽️", 1, 14),
+        RealLifeSeed("Laundry progress step", "خطوة في غسيل الملابس", "🧺", 1, 14),
+        RealLifeSeed("Declutter one zone", "إزالة الفوضى من منطقة واحدة", "📦", 1, 14),
+        RealLifeSeed("Inbox cleanup session", "جلسة تنظيف صندوق الوارد", "📥", 1, 15),
+        RealLifeSeed("Pay bill or track due dates", "دفع فاتورة أو تتبع المواعيد", "💸", 1, 16),
+        RealLifeSeed("Schedule appointment", "تحديد موعد", "📅", 1, 15),
+        RealLifeSeed("Prepare tomorrow outfit", "تحضير ملابس الغد", "👕", 1, 12),
+        RealLifeSeed("Meal prep basic step", "خطوة أساسية في تحضير الوجبات", "🍱", 1, 14),
+        RealLifeSeed("20-min focused cleaning", "تنظيف مركز لمدة 20 دقيقة", "🧼", 1, 16),
+        RealLifeSeed("No impulse buy today", "لا شراء اندفاعي اليوم", "🛑", 1, 15),
+        RealLifeSeed("Review monthly budget", "مراجعة الميزانية الشهرية", "📈", 1, 17),
+        RealLifeSeed("Family logistics planning", "تخطيط الخدمات اللوجستية للعائلة", "🏠", 1, 16),
+        RealLifeSeed("Errand completion", "إكمال مهمة خارجية", "🛒", 1, 15),
+        RealLifeSeed("Organize important docs", "تنظيم الوثائق الهامة", "🗃️", 1, 16),
+        RealLifeSeed("Sleep Routine on time", "روتين النوم في الوقت المحدد", "😴", 1, 16),
+        RealLifeSeed("Morning Routine consistency", "اتساق الروتين الصباحي", "🌅", 1, 15),
+        RealLifeSeed("Evening shutdown ritual", "طقوس الإغلاق المسائية", "🌆", 1, 15),
+        RealLifeSeed("Respect personal boundaries", "احترام الحدود الشخصية", "🧭", 1, 15)
+    )
+    val mindSeeds = listOf(
+        RealLifeSeed("Journal reflection", "تأمل في السجل", "📖", 1, 15),
+        RealLifeSeed("Meditation practice", "ممارسة التأمل", "🧘", 1, 16),
+        RealLifeSeed("Breathing reset", "إعادة ضبط التنفس", "🌬️", 2, 13),
+        RealLifeSeed("Call a family member", "الاتصال بأحد أفراد العائلة", "📞", 1, 18),
+        RealLifeSeed("Visit family or elder", "زيارة العائلة أو كبار السن", "👨‍👩‍👧", 1, 20),
+        RealLifeSeed("Quality talk with partner/friend", "حديث ذو جودة مع شريك/صديق", "💬", 1, 18),
+        RealLifeSeed("Express gratitude to someone", "التعبير عن الامتنان لشخص ما", "🙏", 1, 16),
+        RealLifeSeed("Check in on a friend", "الاطمئنان على صديق", "🤝", 1, 17),
+        RealLifeSeed("Digital detox block", "كتلة التخلص من السموم الرقمية", "📵", 1, 17),
+        RealLifeSeed("Nature reset walk", "مشية استرخاء في الطبيعة", "🌳", 1, 16),
+        RealLifeSeed("Acts of kindness", "أفعال طيبة", "💖", 1, 17),
+        RealLifeSeed("Therapy/self-help exercise", "تمرين علاج/مساعدة ذاتية", "🧠", 1, 18),
+        RealLifeSeed("Set one emotional boundary", "وضع حد عاطفي واحد", "🛡️", 1, 16),
+        RealLifeSeed("Low-stress hobby time", "وقت لهواية منخفضة التوتر", "🎨", 1, 15),
+        RealLifeSeed("Silent reflection block", "كتلة تأمل صامت", "🕯️", 1, 15),
+        RealLifeSeed("Conflict repair message", "رسالة إصلاح خلاف", "🕊️", 1, 19),
+        RealLifeSeed("Family appreciation note", "ملاحظة تقدير للعائلة", "💌", 1, 18),
+        RealLifeSeed("Mindful break from rushing", "استراحة واعية من العجلة", "🐢", 1, 14),
+        RealLifeSeed("Positive self-talk practice", "ممارسة حديث إيجابي مع الذات", "✨", 1, 14),
+        RealLifeSeed("Weekly purpose review", "مراجعة الغرض الأسبوعية", "🧭", 1, 17)
+    )
+
+    return buildList {
+        addAll(expandRealLifeSeeds(RoutineCategory.FITNESS, packageId, fitnessSeeds, lang))
+        addAll(expandRealLifeSeeds(RoutineCategory.STUDY, packageId, studySeeds, lang))
+        addAll(expandRealLifeSeeds(RoutineCategory.HYDRATION, packageId, hydrationSeeds, lang))
+        addAll(expandRealLifeSeeds(RoutineCategory.DISCIPLINE, packageId, disciplineSeeds, lang))
+        addAll(expandRealLifeSeeds(RoutineCategory.MIND, packageId, mindSeeds, lang))
+    }
+}
+
+private fun getRealDailyLifeMilestones(packageId: String, lang: String = "en"): List<Milestone> {
+    val isAr = isArabicLanguage(lang)
+    return if (isAr) {
+        listOf(
+            Milestone("life_arc_1", "الأسبوع 1: استقرار الصباح", "ثبت روتينًا صباحيًا قابلاً للتكرار وحدًا أدنى للترطيب.", 450, listOf("الاستيقاظ في الوقت المحدد 4 أيام", "شرب الماء عند الاستيقاظ", "تخطيط أولوية واحدة كل يوم"), packageId = packageId),
+            Milestone("life_arc_2", "الأسبوع 2: أسس الصحة", "ابنِ اتساقاً في الحركة والوجبات.", 600, listOf("حركة لمدة 5 أيام", "وجبات غنية بالبروتين", "اتساق نافذة النوم"), prerequisiteId = "life_arc_1", packageId = packageId),
+            Milestone("life_arc_3", "الأسبوع 3: أنظمة المنزل", "قلل الاحتكاك في المنزل بأنظمة التنظيف والتخطيط.", 700, listOf("إزالة الفوضى من منطقتين", "إيقاع الغسيل + الأطباق", "تجميع المهمات الخارجية"), prerequisiteId = "life_arc_2", packageId = packageId),
+            Milestone("life_arc_4", "الأسبوع 4: تنظيف المالية", "اجلب الوضوح للمال ومواعيد الاستحقاق.", 850, listOf("تتبع الإنفاق", "دفع أو جدولة الفواتير الرئيسية", "تحديد ميزانية الشهر القادم"), prerequisiteId = "life_arc_3", packageId = packageId),
+            Milestone("life_arc_5", "الأسبوع 5: الاتصال العائلي", "أصلح وعزز العلاقات العائلية.", 1000, listOf("اتصال/اطمئنان مرتين", "زيارة عائلية واحدة", "رسالة تقدير واحدة"), prerequisiteId = "life_arc_4", packageId = packageId),
+            Milestone("life_arc_6", "الأسبوع 6: سباق نمو المهارات", "أنجز مشروع نمو عملي واحد.", 1100, listOf("اختر مهارة واحدة", "ممارسة 5 جلسات", "نشر/مشاركة النتيجة"), prerequisiteId = "life_arc_5", packageId = packageId),
+            Milestone("life_arc_7", "الأسبوع 7: المرونة تجاه التوتر", "درب التنظيم العاطفي تحت ضغط حقيقي.", 1200, listOf("إعادة ضبط التنفس يومياً", "ثلاث كتل تركيز بدون هاتف", "التعامل بهدوء مع محادثة صعبة واحدة"), prerequisiteId = "life_arc_6", packageId = packageId),
+            Milestone("life_arc_8", "الأسبوع 8: المجتمع والخدمة", "ساهم في الأشخاص من حولك.", 1350, listOf("عمل تطوعي/مساعدة واحد", "دعم صديق أو جار", "متابعة مقصودة"), prerequisiteId = "life_arc_7", packageId = packageId),
+            Milestone("life_arc_9", "الأسبوع 9: مراجعة وترقية الحياة", "راجع العادات وأعد تصميم نقاط الضعف.", 1500, listOf("مراجعة سجل 8 أسابيع", "استبدال عادتين منخفضة القيمة", "تصميم خطة الـ 30 يوماً القادمة"), prerequisiteId = "life_arc_8", packageId = packageId)
+        )
+    } else {
+        listOf(
+            Milestone("life_arc_1", "Week 1: Stabilize Morning", "Lock in a repeatable morning Routine and hydration baseline.", 450, listOf("Wake on time 4 days", "Hydrate at wake-up", "Plan one priority each day"), packageId = packageId),
+            Milestone("life_arc_2", "Week 2: Health Foundations", "Build movement and meal consistency.", 600, listOf("Movement 5 days", "Protein-forward meals", "Sleep window consistency"), prerequisiteId = "life_arc_1", packageId = packageId),
+            Milestone("life_arc_3", "Week 3: Home Systems", "Reduce friction at home with cleanup and planning systems.", 700, listOf("Declutter two zones", "Laundry + dishes rhythm", "Errand batching"), prerequisiteId = "life_arc_2", packageId = packageId),
+            Milestone("life_arc_4", "Week 4: Finance Cleanup", "Bring clarity to money and due dates.", 850, listOf("Track spending", "Pay or schedule key bills", "Set next month budget"), prerequisiteId = "life_arc_3", packageId = packageId),
+            Milestone("life_arc_5", "Week 5: Family Connection", "Repair and strengthen family relationships.", 1000, listOf("Call/check-in twice", "One family visit", "One appreciation message"), prerequisiteId = "life_arc_4", packageId = packageId),
+            Milestone("life_arc_6", "Week 6: Skill Growth Sprint", "Ship one practical growth project.", 1100, listOf("Pick one skill", "Practice 5 sessions", "Publish/share outcome"), prerequisiteId = "life_arc_5", packageId = packageId),
+            Milestone("life_arc_7", "Week 7: Stress Resilience", "Train emotional regulation under real pressure.", 1200, listOf("Daily breath reset", "Three no-phone focus blocks", "One hard conversation handled calmly"), prerequisiteId = "life_arc_6", packageId = packageId),
+            Milestone("life_arc_8", "Week 8: Community and Service", "Contribute to people around you.", 1350, listOf("One volunteer/help act", "Support friend or neighbor", "Follow up intentionally"), prerequisiteId = "life_arc_7", packageId = packageId),
+            Milestone("life_arc_9", "Week 9: Life Review and Upgrade", "Audit habits and redesign weak points.", 1500, listOf("Review 8-week history", "Replace 2 low-value habits", "Design next 30-day plan"), prerequisiteId = "life_arc_8", packageId = packageId)
+        )
+    }
+}
+
+fun getRealWorldMomentumTemplate(lang: String = "en"): GameTemplate {
+    val pkg = REAL_WORLD_MOMENTUM_PACKAGE_ID
+    return GameTemplate(
+        templateName = localize(lang, "Real World Momentum", AppLanguage.AR to "زخم العالم الحقيقي"),
+        appTheme = AppTheme.DEFAULT,
+        dailyRoutines = getRealDailyLifePool(pkg, lang),
+        milestones = getRealWorldMomentumMilestones(pkg, lang),
+        catalogItems = getDefaultShopItems(lang),
+        packageId = pkg,
+        templateSettings = TemplateSettings()
+    )
+}
+
+private fun getRealWorldMomentumMilestones(packageId: String, lang: String = "en"): List<Milestone> {
+    val isAr = isArabicLanguage(lang)
+    return if (isAr) {
+        listOf(
+            Milestone(
+                id = "rw_arc_1",
+                title = "الفصل 1: قاعدة المشي + الترطيب",
+                description = "ثبت عاداتك الأساسية أولاً.",
+                steps = listOf("مشى 1 كم في 3 أيام منفصلة", "شرب 3 أكواب ماء قبل الظهر في 4 أيام", "تسجيل الإكمال بصدق"),
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_2",
+                title = "الفصل 2: نظام المنزل",
+                description = "ابنِ إيقاع منزلي نظيف وقليل الاحتكاك.",
+                steps = listOf("إعادة ضبط الغرفة لمدة 10 دقائق لـ 5 أيام", "إيقاع الغسيل + الأطباق", "تحضير الغد كل مساء"),
+                prerequisiteId = "rw_arc_1",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_3",
+                title = "الفصل 3: إعادة الاتصال بالدائرة",
+                description = "عزز شبكة الدعم الاجتماعي الخاصة بك.",
+                steps = listOf("الاطمئنان على 3 أصدقاء/عائلة", "اتصال هادف واحد", "رسالة امتنان واحدة"),
+                prerequisiteId = "rw_arc_2",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_4",
+                title = "الفصل 4: زيارة دعم",
+                description = "كن متواجداً لشخص في فترة صعبة.",
+                steps = listOf("زيارة صديق/عائلة في مستشفى أو سجن عند الاقتضاء", "إذا لم يكن ممكناً، إجراء اتصال دعم طويل", "المتابعة مرة أخرى خلال الأسبوع"),
+                prerequisiteId = "rw_arc_3",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_5",
+                title = "الفصل 5: مهمة نزهة نهاية الأسبوع",
+                description = "ادفع قدرتك على التحمل بمجهود خارجي هادف.",
+                steps = listOf("تخطيط المسار + تحضير السلامة", "إكمال نزهة واحدة أو مشي طويل في ممر", "روتين استشفاء ما بعد النزهة"),
+                prerequisiteId = "rw_arc_4",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_6",
+                title = "الفصل 6: انضباط التغذية",
+                description = "ارتقِ بجودة الوجبات واتساقها.",
+                steps = listOf("وجبات غنية بالبروتين لـ 5 أيام", "لا مشروبات سكرية لـ 6 أيام", "تحقيق هدف الترطيب لـ 6 أيام"),
+                prerequisiteId = "rw_arc_5",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_7",
+                title = "الفصل 7: المثبت المالي",
+                description = "قلل من ضغوط المال بأنظمة نظيفة.",
+                steps = listOf("تتبع كل إنفاق لمدة 7 أيام", "دفع/جدولة الرسوم الرئيسية", "تحديد سقف الشهر القادم + مخزن طوارئ"),
+                prerequisiteId = "rw_arc_6",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_8",
+                title = "الفصل 8: خدمة المجتمع",
+                description = "ساهم بما هو أبعد من قائمة مهامك الخاصة.",
+                steps = listOf("عمل تطوعي/مساعدة واحد", "دعم مهمة لجار/صديق", "توثيق الأثر"),
+                prerequisiteId = "rw_arc_7",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_9",
+                title = "الفصل 9: سباق نمو المهارات",
+                description = "أنجز ترقية واحدة عملية للحياة/الوظيفة.",
+                steps = listOf("اختر مهارة نمو واحدة", "5 جلسات مركزة", "مشاركة أو نشر النتيجة"),
+                prerequisiteId = "rw_arc_8",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_10",
+                title = "الفصل 10: الصعود في الحياة الحقيقية",
+                description = "عزز المكاسب وثبت عادات المستوى التالي.",
+                steps = listOf("مراجعة قوس التقدم الكامل", "ترقية 3 عادات إلى غير قابلة للتفاوض", "كتابة مهمتك للـ 30 يوماً القادمة"),
+                prerequisiteId = "rw_arc_9",
+                packageId = packageId
+            )
+        )
+    } else {
+        listOf(
+            Milestone(
+                id = "rw_arc_1",
+                title = "Chapter 1: Walk + Hydrate Base",
+                description = "Establish your baseline habits first.",
+                steps = listOf("Walk 1 km on 3 separate days", "Drink 3 cups of water before noon on 4 days", "Log completion honestly"),
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_2",
+                title = "Chapter 2: Home Order",
+                description = "Build a clean, low-friction home rhythm.",
+                steps = listOf("10-minute room reset for 5 days", "Laundry + dishes cadence", "Prep tomorrow each evening"),
+                prerequisiteId = "rw_arc_1",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_3",
+                title = "Chapter 3: Reconnect Circle",
+                description = "Strengthen your social support network.",
+                steps = listOf("Check in with 3 friends/family", "One meaningful call", "One gratitude message"),
+                prerequisiteId = "rw_arc_2",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_4",
+                title = "Chapter 4: Support Visit",
+                description = "Show up for someone in a difficult season.",
+                steps = listOf("Visit a friend/family in hospital or prison when applicable", "If not possible, complete a long support call", "Follow up again within the week"),
+                prerequisiteId = "rw_arc_3",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_5",
+                title = "Chapter 5: Weekend Hike Mission",
+                description = "Push endurance with one meaningful outdoor effort.",
+                steps = listOf("Plan route + safety prep", "Complete one hike or long trail walk", "Post-hike recovery Routine"),
+                prerequisiteId = "rw_arc_4",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_6",
+                title = "Chapter 6: Nutrition Discipline",
+                description = "Upgrade meal quality and consistency.",
+                steps = listOf("Protein-forward meals 5 days", "No sugary drinks for 6 days", "Hydration target met for 6 days"),
+                prerequisiteId = "rw_arc_5",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_7",
+                title = "Chapter 7: Financial Stabilizer",
+                description = "Reduce money stress with clean systems.",
+                steps = listOf("Track every spend for 7 days", "Pay/schedule key dues", "Set next month cap + emergency buffer"),
+                prerequisiteId = "rw_arc_6",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_8",
+                title = "Chapter 8: Community Service",
+                description = "Contribute beyond your own to-do list.",
+                steps = listOf("One volunteer/help action", "Support a neighbor/friend task", "Document the impact"),
+                prerequisiteId = "rw_arc_7",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_9",
+                title = "Chapter 9: Skill Growth Sprint",
+                description = "Ship one practical life/career upgrade.",
+                steps = listOf("Choose one growth skill", "5 focused sessions", "Share or deploy the result"),
+                prerequisiteId = "rw_arc_8",
+                packageId = packageId
+            ),
+            Milestone(
+                id = "rw_arc_10",
+                title = "Chapter 10: Real-Life Ascension",
+                description = "Consolidate wins and lock next habits.",
+                steps = listOf("Review the full progression arc", "Promote 3 habits to non-negotiables", "Write your next 30-day mission"),
+                prerequisiteId = "rw_arc_9",
+                packageId = packageId
+            )
+        )
+    }
+}
+
+fun getDefaultShopItems(lang: String = "en"): List<CatalogItem> {
+    return listOf(
+        CatalogItem(
+            "shop_apple",
+            localize(lang, "Apple", AppLanguage.AR to "تفاحة"),
+            "\uD83C\uDF4E",
+            localize(lang, "Simple snack reward", AppLanguage.AR to "مكافأة وجبة خفيفة بسيطة"),
+            5, 5, 5, true
+        ),
+        CatalogItem(
+            "shop_coffee",
+            localize(lang, "Coffee Break", AppLanguage.AR to "استراحة قهوة"),
+            "\u2615",
+            localize(lang, "Take a relaxing coffee break", AppLanguage.AR to "خذ استراحة قهوة مريحة"),
+            15, 3, 3, true
+        )
+    )
+}
+
+fun getRoutineFeatureTestTemplate(lang: String = "en"): GameTemplate {
+    val pkg = Routine_FEATURE_TEST_PACKAGE_ID
+    val isAr = isArabicLanguage(lang)
+    val daily = if (isAr) {
+        listOf(
+            // Fitness (5)
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "مشي خفيف 1 كم", "🚶", 24, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "جري 12 دقيقة", "🏃", 34, 720, isPinned = true, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 720),
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "هدف الخطوات", "👟", 32, 6000, packageId = pkg, objectiveType = RoutineObjectiveType.HEALTH, healthMetric = "steps", healthAggregation = "daily_total"),
+            RoutineTemplate(RoutineCategory.FITNESS, 2, "تمدد الحركة 10 دقائق", "🤸", 26, 600, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 600),
+            RoutineTemplate(RoutineCategory.FITNESS, 4, "حرق 300 سعرة", "🔥", 46, 300, packageId = pkg, objectiveType = RoutineObjectiveType.HEALTH, healthMetric = "calories_kcal", healthAggregation = "daily_total"),
+            // Study (5)
+            RoutineTemplate(RoutineCategory.STUDY, 1, "جلسة قراءة مركزة", "📚", 24, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.STUDY, 1, "تركيز 25 دقيقة", "⏱️", 34, 1500, isPinned = true, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 1500),
+            RoutineTemplate(RoutineCategory.STUDY, 2, "مراجعة 20 بطاقة", "🃏", 28, 20, packageId = pkg),
+            RoutineTemplate(RoutineCategory.STUDY, 3, "كتابة ملاحظات 15 دقيقة", "📝", 32, 900, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 900),
+            RoutineTemplate(RoutineCategory.STUDY, 4, "كتلة عمل عميق 45 دقيقة", "🧠", 46, 2700, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 2700),
+            // Hydration (5)
+            RoutineTemplate(RoutineCategory.HYDRATION, 1, "اشرب 4 أكواب ماء", "💧", 16, 4, isPinned = true, packageId = pkg),
+            RoutineTemplate(RoutineCategory.HYDRATION, 2, "ماء قبل الوجبات", "🥤", 22, 3, packageId = pkg),
+            RoutineTemplate(RoutineCategory.HYDRATION, 2, "تتبع الماء اليومي", "📏", 24, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.HYDRATION, 3, "ترطيب + مشي 10 دقائق", "🚰", 32, 600, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 600),
+            RoutineTemplate(RoutineCategory.HYDRATION, 3, "مشي 2500 متر", "🛣️", 34, 2500, packageId = pkg, objectiveType = RoutineObjectiveType.HEALTH, healthMetric = "distance_m", healthAggregation = "daily_total"),
+            // Discipline (5)
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 1, "رتب السرير", "🛏️", 14, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 1, "تنظيف مركز 15 دقيقة", "🧹", 24, 900, isPinned = true, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 900),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 2, "تنظيم منطقة واحدة", "📦", 22, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 3, "إيقاف الهاتف 30 دقيقة", "📵", 32, 1800, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 1800),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 4, "مشي سريع 20 دقيقة", "⚡", 44, 1200, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 1200),
+            // Mind (5)
+            RoutineTemplate(RoutineCategory.MIND, 1, "تسجيل يومي قصير", "📖", 14, 1, isPinned = true, packageId = pkg),
+            RoutineTemplate(RoutineCategory.MIND, 2, "تنفس واعي 8 دقائق", "🌬️", 24, 480, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 480),
+            RoutineTemplate(RoutineCategory.MIND, 2, "رسالة امتنان", "🙏", 20, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.MIND, 3, "تأمل 15 دقيقة", "🧘", 32, 900, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 900),
+            RoutineTemplate(RoutineCategory.MIND, 4, "متوسط نبض هادئ", "❤️", 44, 90, packageId = pkg, objectiveType = RoutineObjectiveType.HEALTH, healthMetric = "heart_rate", healthAggregation = "daily_avg")
+        )
+    } else {
+        listOf(
+            // Fitness (5)
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "Light walk 1 km", "🚶", 24, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.FITNESS, 1, "Run 12 minutes", "🏃", 34, 720, isPinned = true, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 720),
+            RoutineTemplate(RoutineCategory.FITNESS, 3, "Step goal hit", "👟", 32, 6000, packageId = pkg, objectiveType = RoutineObjectiveType.HEALTH, healthMetric = "steps", healthAggregation = "daily_total"),
+            RoutineTemplate(RoutineCategory.FITNESS, 2, "Mobility stretch 10 min", "🤸", 26, 600, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 600),
+            RoutineTemplate(RoutineCategory.FITNESS, 4, "Burn 300 kcal", "🔥", 46, 300, packageId = pkg, objectiveType = RoutineObjectiveType.HEALTH, healthMetric = "calories_kcal", healthAggregation = "daily_total"),
+            // Study (5)
+            RoutineTemplate(RoutineCategory.STUDY, 1, "Focused reading session", "📚", 24, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.STUDY, 1, "Focus sprint 25 min", "⏱️", 34, 1500, isPinned = true, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 1500),
+            RoutineTemplate(RoutineCategory.STUDY, 2, "Review 20 flashcards", "🃏", 28, 20, packageId = pkg),
+            RoutineTemplate(RoutineCategory.STUDY, 3, "Write notes 15 min", "📝", 32, 900, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 900),
+            RoutineTemplate(RoutineCategory.STUDY, 4, "Deep work block 45 min", "🧠", 46, 2700, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 2700),
+            // Hydration (5)
+            RoutineTemplate(RoutineCategory.HYDRATION, 1, "Drink 4 cups of water", "💧", 16, 4, isPinned = true, packageId = pkg),
+            RoutineTemplate(RoutineCategory.HYDRATION, 2, "Water before meals", "🥤", 22, 3, packageId = pkg),
+            RoutineTemplate(RoutineCategory.HYDRATION, 2, "Track hydration check-in", "📏", 24, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.HYDRATION, 3, "Hydrate + walk 10 min", "🚰", 32, 600, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 600),
+            RoutineTemplate(RoutineCategory.HYDRATION, 3, "Walk distance 2500 m", "🛣️", 34, 2500, packageId = pkg, objectiveType = RoutineObjectiveType.HEALTH, healthMetric = "distance_m", healthAggregation = "daily_total"),
+            // Discipline (5)
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 1, "Make your bed", "🛏️", 14, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 1, "Focused cleanup 15 min", "🧹", 24, 900, isPinned = true, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 900),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 2, "Declutter one zone", "📦", 22, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 3, "Phone-off block 30 min", "📵", 32, 1800, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 1800),
+            RoutineTemplate(RoutineCategory.DISCIPLINE, 4, "Brisk walk 20 min", "⚡", 44, 1200, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 1200),
+            // Mind (5)
+            RoutineTemplate(RoutineCategory.MIND, 1, "Quick journal entry", "📖", 14, 1, isPinned = true, packageId = pkg),
+            RoutineTemplate(RoutineCategory.MIND, 2, "Mindful breathing 8 min", "🌬️", 24, 480, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 480),
+            RoutineTemplate(RoutineCategory.MIND, 2, "Send gratitude message", "🙏", 20, 1, packageId = pkg),
+            RoutineTemplate(RoutineCategory.MIND, 3, "Meditation 15 min", "🧘", 32, 900, packageId = pkg, objectiveType = RoutineObjectiveType.TIMER, targetSeconds = 900),
+            RoutineTemplate(RoutineCategory.MIND, 4, "Calm heart-rate average", "❤️", 44, 90, packageId = pkg, objectiveType = RoutineObjectiveType.HEALTH, healthMetric = "heart_rate", healthAggregation = "daily_avg")
+        )
+    }
+    return GameTemplate(
+        templateName = localize(lang, "Routine Feature Test Pack", AppLanguage.AR to "حزمة اختبار ميزات المهام"),
+        appTheme = AppTheme.DEFAULT,
+        dailyRoutines = daily,
+        milestones = emptyList(),
+        catalogItems = getDefaultShopItems(lang),
+        packageId = pkg,
+        templateSettings = TemplateSettings(customMode = true, advancedOptions = true, alwaysShowRoutineProgress = true)
+    )
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
