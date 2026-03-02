@@ -11,6 +11,8 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
 import androidx.datastore.preferences.core.edit
 import com.google.gson.Gson
+import com.google.gson.JsonElement
+import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -160,6 +162,227 @@ private const val AUTH_STATE_KEY_ALIAS = "questify_auth_state_key_v1"
 /* ===================== SERIALIZERS ===================== */
 
 private val gson = Gson()
+
+private data class LegacyGameTemplatePayload(
+    val templateName: String = "My Template",
+    val appTheme: String? = null,
+    val dailyQuests: List<LegacyQuestTemplatePayload> = emptyList(),
+    val mainQuests: List<LegacyMainQuestPayload> = emptyList(),
+    val shopItems: List<LegacyShopItemPayload> = emptyList(),
+    val packageId: String = "",
+    val templateSettings: TemplateSettings? = null,
+    val accentArgb: Long? = null,
+    val isPremium: Boolean = false
+)
+
+private data class LegacyQuestTemplatePayload(
+    val category: String = RoutineCategory.DISCIPLINE.name,
+    val title: String = "",
+    val icon: String = "",
+    val target: Int = 1,
+    val isPinned: Boolean = false,
+    val imageUri: String? = null
+)
+
+private data class LegacyMainQuestPayload(
+    val id: String = "",
+    val title: String = "",
+    val description: String = "",
+    val steps: List<String> = emptyList(),
+    val currentStep: Int = 0,
+    val prerequisiteId: String? = null,
+    val packageId: String = "",
+    val isActive: Boolean = true
+)
+
+private data class LegacyShopItemPayload(
+    val id: String = "",
+    val name: String = "",
+    val icon: String = "",
+    val cost: Int = 0,
+    val stock: Int = 0,
+    val maxStock: Int = 0,
+    val imageUri: String? = null,
+    val description: String = "",
+    val isConsumable: Boolean = true
+)
+
+private fun firstNonBlank(vararg values: String?): String? {
+    return values.firstOrNull { !it.isNullOrBlank() }
+}
+
+private fun parseThemeNameOrDefault(themeName: String?): AppTheme {
+    val normalized = themeName.orEmpty().trim().uppercase()
+    return runCatching { AppTheme.valueOf(normalized) }.getOrDefault(AppTheme.DEFAULT)
+}
+
+private fun convertLegacyTemplateToCurrent(legacy: LegacyGameTemplatePayload): GameTemplate {
+    val packageId = legacy.packageId.ifBlank { UUID.randomUUID().toString() }
+    val routines = legacy.dailyQuests.map { legacyRoutine ->
+        val category = runCatching {
+            RoutineCategory.valueOf(legacyRoutine.category.trim().uppercase())
+        }.getOrDefault(RoutineCategory.DISCIPLINE)
+        RoutineTemplate(
+            category = category,
+            title = legacyRoutine.title,
+            icon = legacyRoutine.icon,
+            target = legacyRoutine.target.coerceAtLeast(1),
+            isPinned = legacyRoutine.isPinned,
+            imageUri = legacyRoutine.imageUri,
+            packageId = packageId
+        )
+    }
+    val milestones = legacy.mainQuests.mapIndexed { index, legacyMilestone ->
+        val steps = legacyMilestone.steps.map { it.trim() }.filter { it.isNotBlank() }
+        val safeSteps = if (steps.isEmpty()) listOf("Preparation", "Execution", "Completion") else steps
+        val safeCurrentStep = legacyMilestone.currentStep.coerceIn(0, safeSteps.lastIndex.coerceAtLeast(0))
+        Milestone(
+            id = legacyMilestone.id.ifBlank { UUID.randomUUID().toString() },
+            title = legacyMilestone.title.ifBlank { "Milestone ${index + 1}" },
+            description = legacyMilestone.description,
+            steps = safeSteps,
+            currentStep = safeCurrentStep,
+            prerequisiteId = legacyMilestone.prerequisiteId?.takeIf { it.isNotBlank() },
+            packageId = legacyMilestone.packageId.ifBlank { packageId },
+            isActive = legacyMilestone.isActive
+        )
+    }
+    val catalog = legacy.shopItems.mapIndexed { index, legacyItem ->
+        val safeMaxStock = when {
+            legacyItem.maxStock > 0 -> legacyItem.maxStock
+            legacyItem.stock > 0 -> legacyItem.stock
+            else -> 1
+        }
+        CatalogItem(
+            id = legacyItem.id.ifBlank { "legacy_item_${UUID.randomUUID()}" },
+            name = legacyItem.name.ifBlank { "Item ${index + 1}" },
+            icon = legacyItem.icon.ifBlank { "🧩" },
+            description = legacyItem.description,
+            cost = legacyItem.cost.coerceAtLeast(1),
+            stock = legacyItem.stock.coerceIn(0, safeMaxStock),
+            maxStock = safeMaxStock,
+            isConsumable = legacyItem.isConsumable,
+            imageUri = legacyItem.imageUri,
+            type = CatalogItemType.WANT
+        )
+    }
+    return GameTemplate(
+        templateName = legacy.templateName,
+        appTheme = parseThemeNameOrDefault(legacy.appTheme),
+        dailyRoutines = routines,
+        milestones = milestones,
+        catalogItems = catalog,
+        packageId = packageId,
+        templateSettings = legacy.templateSettings,
+        accentArgb = legacy.accentArgb,
+        isPremium = legacy.isPremium
+    )
+}
+
+private fun parseGameTemplateElementCompat(element: JsonElement): GameTemplate? {
+    if (!element.isJsonObject) return null
+    val obj = element.asJsonObject
+    val hasLegacyShape = obj.has("dailyQuests") || obj.has("mainQuests") || obj.has("shopItems")
+    val parsed = if (hasLegacyShape) {
+        gson.fromJson(obj, LegacyGameTemplatePayload::class.java)?.let(::convertLegacyTemplateToCurrent)
+    } else {
+        gson.fromJson(obj, GameTemplate::class.java)
+    }
+    return parsed?.let { normalizeGameTemplateSafe(it) }
+}
+
+private fun parseGameTemplateStringCompat(rawJson: String): GameTemplate? {
+    val parsedElement = runCatching { JsonParser.parseString(rawJson) }.getOrNull()
+    if (parsedElement != null) {
+        return runCatching { parseGameTemplateElementCompat(parsedElement) }.getOrNull()
+    }
+    return runCatching { gson.fromJson(rawJson, GameTemplate::class.java) }
+        .getOrNull()
+        ?.let { normalizeGameTemplateSafe(it) }
+}
+
+private fun routineFingerprint(routine: Routine): String {
+    return "${routine.category.name}|${routine.title.trim().lowercase()}|${routine.target}|${routine.icon.trim().lowercase()}"
+}
+
+private fun mergeLegacyRoutinesSerialized(currentRaw: String?, legacyRaw: String?): String? {
+    val legacy = deserializeRoutines(legacyRaw.orEmpty())
+    if (legacy.isEmpty()) return null
+    val current = deserializeRoutines(currentRaw.orEmpty())
+    if (current.isEmpty()) return serializeRoutines(legacy)
+    val merged = current.toMutableList()
+    val fingerprints = current.map(::routineFingerprint).toMutableSet()
+    var nextId = merged.maxOfOrNull { it.id } ?: 0
+    legacy.forEach { oldRoutine ->
+        val fp = routineFingerprint(oldRoutine)
+        if (fingerprints.contains(fp)) return@forEach
+        var candidate = oldRoutine
+        if (merged.any { it.id == candidate.id }) {
+            nextId += 1
+            candidate = candidate.copy(id = nextId)
+        }
+        merged += candidate
+        fingerprints += routineFingerprint(candidate)
+    }
+    return if (merged.size > current.size) serializeRoutines(merged) else null
+}
+
+private fun milestoneFingerprint(milestone: Milestone): String {
+    val stepsFingerprint = milestone.steps.joinToString("~") { it.trim().lowercase() }
+    return "${milestone.title.trim().lowercase()}|${milestone.description.trim().lowercase()}|$stepsFingerprint"
+}
+
+private fun mergeLegacyMilestonesSerialized(currentRaw: String?, legacyRaw: String?): String? {
+    val legacy = deserializeMilestones(legacyRaw.orEmpty())
+    if (legacy.isEmpty()) return null
+    val current = deserializeMilestones(currentRaw.orEmpty())
+    if (current.isEmpty()) return serializeMilestones(legacy)
+    val merged = current.toMutableList()
+    val fingerprints = current.map(::milestoneFingerprint).toMutableSet()
+    val usedIds = current.map { it.id }.toMutableSet()
+    legacy.forEachIndexed { index, oldMilestone ->
+        val fp = milestoneFingerprint(oldMilestone)
+        if (fingerprints.contains(fp)) return@forEachIndexed
+        val safeId = when {
+            oldMilestone.id.isBlank() -> UUID.randomUUID().toString()
+            usedIds.contains(oldMilestone.id) -> "${oldMilestone.id}_${index + 1}"
+            else -> oldMilestone.id
+        }
+        val candidate = oldMilestone.copy(id = safeId)
+        usedIds += safeId
+        merged += candidate
+        fingerprints += milestoneFingerprint(candidate)
+    }
+    return if (merged.size > current.size) serializeMilestones(merged) else null
+}
+
+private fun catalogFingerprint(item: CatalogItem): String {
+    return "${item.name.trim().lowercase()}|${item.icon.trim().lowercase()}|${item.cost}|${item.description.trim().lowercase()}"
+}
+
+private fun mergeLegacyCatalogSerialized(currentRaw: String?, legacyRaw: String?): String? {
+    val legacy = deserializeCatalogItems(legacyRaw)
+    if (legacy.isEmpty()) return null
+    val current = deserializeCatalogItems(currentRaw)
+    if (current.isEmpty()) return serializeCatalogItems(legacy)
+    val merged = current.toMutableList()
+    val fingerprints = current.map(::catalogFingerprint).toMutableSet()
+    val usedIds = current.map { it.id }.toMutableSet()
+    legacy.forEachIndexed { index, oldItem ->
+        val fp = catalogFingerprint(oldItem)
+        if (fingerprints.contains(fp)) return@forEachIndexed
+        val safeId = when {
+            oldItem.id.isBlank() -> "legacy_item_${UUID.randomUUID()}"
+            usedIds.contains(oldItem.id) -> "${oldItem.id}_${index + 1}"
+            else -> oldItem.id
+        }
+        val candidate = oldItem.copy(id = safeId)
+        usedIds += safeId
+        merged += candidate
+        fingerprints += catalogFingerprint(candidate)
+    }
+    return if (merged.size > current.size) serializeCatalogItems(merged) else null
+}
 
 fun serializeInventory(list: List<InventoryItem>): String {
     return list.joinToString(";;") { i ->
@@ -769,11 +992,11 @@ fun importGameTemplate(payload: String): GameTemplate? {
         val bytes = Base64.decode(trimmed, Base64.URL_SAFE or Base64.NO_WRAP)
         if (bytes.size > MAX_TEMPLATE_COMPRESSED_BYTES) return null
         val json = gunzipToUtf8Limited(bytes, MAX_TEMPLATE_JSON_BYTES) ?: return null
-        gson.fromJson(json, GameTemplate::class.java)?.let { normalizeGameTemplateSafe(it) }
+        parseGameTemplateStringCompat(json)
     } catch (e: Exception) {
         if (trimmed.length > MAX_TEMPLATE_JSON_BYTES) return null
         try {
-            gson.fromJson(trimmed, GameTemplate::class.java)?.let { normalizeGameTemplateSafe(it) }
+            parseGameTemplateStringCompat(trimmed)
         } catch (e2: Exception) {
             null
         }
@@ -788,9 +1011,16 @@ fun serializeSavedTemplates(list: List<GameTemplate>): String {
 fun deserializeSavedTemplates(json: String?): List<GameTemplate> {
     if (json.isNullOrBlank()) return emptyList()
     return try {
-        val type = object : com.google.gson.reflect.TypeToken<List<GameTemplate>>() {}.type
-        val parsed: List<GameTemplate> = gson.fromJson(json, type) ?: emptyList()
-        parsed.mapNotNull { runCatching { normalizeGameTemplateSafe(it) }.getOrNull() }
+        val root = JsonParser.parseString(json)
+        when {
+            root.isJsonArray -> root.asJsonArray.mapNotNull { element ->
+                runCatching { parseGameTemplateElementCompat(element) }.getOrNull()
+            }
+            root.isJsonObject -> listOfNotNull(
+                runCatching { parseGameTemplateElementCompat(root) }.getOrNull()
+            )
+            else -> emptyList()
+        }
     } catch (e: Exception) {
         emptyList()
     }
@@ -856,10 +1086,15 @@ fun serializeCalendarPlans(map: Map<Long, List<String>>): String {
 suspend fun runDataMigrations(context: Context) {
     val prefs = context.dataStore.data.first()
     val fromVersion = prefs[Keys.DATA_VERSION] ?: 0
-    if (fromVersion >= CURRENT_DATA_VERSION) return
     val legacyQuestsKey = stringPreferencesKey("quests_serialized")
-    val legacyMainQuestsKey = stringPreferencesKey("main_quests_v1")
-    val legacyShopItemsKey = stringPreferencesKey("shop_items_serialized")
+    val legacyMainQuestsV1Key = stringPreferencesKey("main_quests_v1")
+    val legacyMainQuestsV2Key = stringPreferencesKey("main_quests_v2")
+    val legacyShopItemsSerializedKey = stringPreferencesKey("shop_items_serialized")
+    val legacyShopItemsKey = stringPreferencesKey("shop_items")
+    val hasLegacyCompatSource = !prefs[legacyQuestsKey].isNullOrBlank() ||
+        !firstNonBlank(prefs[legacyMainQuestsV2Key], prefs[legacyMainQuestsV1Key]).isNullOrBlank() ||
+        !firstNonBlank(prefs[legacyShopItemsKey], prefs[legacyShopItemsSerializedKey]).isNullOrBlank()
+    if (fromVersion >= CURRENT_DATA_VERSION && !hasLegacyCompatSource) return
 
     context.dataStore.edit { p ->
         if (fromVersion < 1) {
@@ -894,15 +1129,33 @@ suspend fun runDataMigrations(context: Context) {
                 if (!legacyRoutines.isNullOrBlank()) p[Keys.ROUTINES] = legacyRoutines
             }
             if (p[Keys.MILESTONES].isNullOrBlank()) {
-                val legacyMilestones = p[legacyMainQuestsKey]
+                val legacyMilestones = firstNonBlank(p[legacyMainQuestsV2Key], p[legacyMainQuestsV1Key])
                 if (!legacyMilestones.isNullOrBlank()) p[Keys.MILESTONES] = legacyMilestones
             }
             if (p[Keys.CATALOG_ITEMS].isNullOrBlank()) {
-                val legacyCatalog = p[legacyShopItemsKey]
+                val legacyCatalog = firstNonBlank(p[legacyShopItemsKey], p[legacyShopItemsSerializedKey])
                 if (!legacyCatalog.isNullOrBlank()) p[Keys.CATALOG_ITEMS] = legacyCatalog
             }
         }
-        p[Keys.DATA_VERSION] = CURRENT_DATA_VERSION
+        // Compat bridge for forked/renamed builds that may already be on the same schema version.
+        mergeLegacyRoutinesSerialized(
+            currentRaw = p[Keys.ROUTINES],
+            legacyRaw = p[legacyQuestsKey]
+        )?.let { p[Keys.ROUTINES] = it }
+
+        mergeLegacyMilestonesSerialized(
+            currentRaw = p[Keys.MILESTONES],
+            legacyRaw = firstNonBlank(p[legacyMainQuestsV2Key], p[legacyMainQuestsV1Key])
+        )?.let { p[Keys.MILESTONES] = it }
+
+        mergeLegacyCatalogSerialized(
+            currentRaw = p[Keys.CATALOG_ITEMS],
+            legacyRaw = firstNonBlank(p[legacyShopItemsKey], p[legacyShopItemsSerializedKey])
+        )?.let { p[Keys.CATALOG_ITEMS] = it }
+
+        if (fromVersion < CURRENT_DATA_VERSION) {
+            p[Keys.DATA_VERSION] = CURRENT_DATA_VERSION
+        }
     }
 }
 

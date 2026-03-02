@@ -1,38 +1,27 @@
-# Android/Gradle
 .gradle/
 .gradle-home/
 .gradle-user-home/
 .gradle-user/
 build/
 app/build/
-*/build/
 local.properties
-
-# IDE
 .idea/
-*.iml
-.vscode/
-.vs/
-
-# Kotlin/Android tool caches
-.kotlin/
 .kotlinc/
-.android/
-.android-home/
+.kotlin/
+.vs/
+.claude/
 .android-user/
+.android-home/
 .gradle-testhome/
 .sandbox-home/
-.claude/
-
-# Logs and temp artifacts
-*.log
-*_log.txt
+android_home_tmp/
+android_home_tmp2/
 tmp/
+safety_backups/
+.vscode/
+build_log.txt
 combined_project.txt
 kotlin_only.txt
 screen.png
 session-*.m
-
-# OS files
-.DS_Store
-Thumbs.db
+*.log

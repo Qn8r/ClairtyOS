@@ -12,9 +12,10 @@ val localProps = Properties().apply {
 }
 val supabaseUrl = localProps.getProperty("SUPABASE_URL", "")
 val supabaseAnonKey = localProps.getProperty("SUPABASE_ANON_KEY", "")
+val googleWebClientId = localProps.getProperty("GOOGLE_WEB_CLIENT_ID", "")
 
 android {
-    namespace = "com.example.livinglifemmo"
+    namespace = "com.example.questify"
     compileSdk = 35
 
     defaultConfig {
@@ -27,6 +28,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"$supabaseAnonKey\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
     }
 
     buildTypes {
@@ -41,10 +43,17 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        isCoreLibraryDesugaringEnabled = true
     }
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    bundle {
+        language {
+            // App switches locale at runtime; keep languages in base split.
+            enableSplit = false
+        }
     }
     lint {
         disable += setOf(
@@ -53,6 +62,12 @@ android {
             "AndroidGradlePluginVersion",
             "OldTargetApi"
         )
+    }
+    sourceSets {
+        getByName("main") {
+            // Compile only the active Questify package tree; keep legacy clone untouched on disk.
+            java.setSrcDirs(listOf("src/main/java/com/example/questify"))
+        }
     }
 }
 
@@ -81,6 +96,8 @@ dependencies {
     implementation(libs.google.gson)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.google.play.services.auth)
+    implementation(libs.androidx.health.connect.client)
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

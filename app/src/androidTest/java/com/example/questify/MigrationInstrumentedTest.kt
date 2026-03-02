@@ -14,13 +14,17 @@ class MigrationInstrumentedTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
     @Before
-    fun setup() = runBlocking {
-        context.dataStore.edit { it.clear() }
+    fun setup() {
+        runBlocking {
+            context.dataStore.edit { it.clear() }
+        }
     }
 
     @After
-    fun teardown() = runBlocking {
-        context.dataStore.edit { it.clear() }
+    fun teardown() {
+        runBlocking {
+            context.dataStore.edit { it.clear() }
+        }
     }
 
     @Test

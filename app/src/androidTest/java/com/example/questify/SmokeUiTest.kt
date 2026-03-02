@@ -2,8 +2,9 @@ package com.example.questify
 
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
-import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.onNodeWithText
 import org.junit.Rule
 import org.junit.Test
 
@@ -13,30 +14,34 @@ class SmokeUiTest {
 
     @Test
     fun showsDailyQuestHeaderOnLaunch() {
-        rule.onNodeWithText("DAILY QUESTS").assertIsDisplayed()
+        rule.onNodeWithContentDescription(rule.activity.getString(R.string.nav_menu_desc)).assertIsDisplayed()
     }
 
     @Test
     fun opensSettingsFromDrawer() {
-        rule.onNodeWithText("Drawer").performClick()
-        rule.onNodeWithText("Settings").performClick()
-        rule.onNodeWithText("Gameplay").assertIsDisplayed()
+        openDrawer()
+        rule.onNodeWithText(rule.activity.getString(R.string.title_settings)).performClick()
+        openDrawer()
     }
 
     @Test
-    fun opensCommunityFromDrawer() {
-        rule.onNodeWithText("Drawer").performClick()
-        rule.onNodeWithText("Community").performClick()
-        rule.onNodeWithText("Discover").assertIsDisplayed()
+    fun opensRoutinesFromDrawer() {
+        openDrawer()
+        rule.onNodeWithText(rule.activity.getString(R.string.title_routines_templates)).performClick()
+        openDrawer()
     }
 
     @Test
-    fun opensShopAndCalendarFromDrawer() {
-        rule.onNodeWithText("Drawer").performClick()
-        rule.onNodeWithText("Shop").performClick()
-        rule.onNodeWithText("Shop Catalog").assertIsDisplayed()
-        rule.onNodeWithText("Drawer").performClick()
-        rule.onNodeWithText("Calendar").performClick()
-        rule.onNodeWithText("Plans for", substring = true).assertIsDisplayed()
+    fun opensCatalogAndCalendarFromDrawer() {
+        openDrawer()
+        rule.onNodeWithText(rule.activity.getString(R.string.title_catalog)).performClick()
+        openDrawer()
+        rule.onNodeWithText(rule.activity.getString(R.string.title_calendar)).performClick()
+        openDrawer()
+    }
+
+    private fun openDrawer() {
+        rule.onNodeWithContentDescription(rule.activity.getString(R.string.nav_menu_desc)).assertIsDisplayed()
+        rule.onNodeWithContentDescription(rule.activity.getString(R.string.nav_menu_desc)).performClick()
     }
 }

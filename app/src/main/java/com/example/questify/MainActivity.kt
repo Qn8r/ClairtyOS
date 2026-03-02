@@ -1491,7 +1491,10 @@ fun AppRoot(appContext: Context) {
             val dataUri = intent.data
             val trustedSource = when (dataUri?.scheme?.lowercase()) {
                 "https" -> dataUri.host.equals("qn8r.github.io", ignoreCase = true) &&
-                    (dataUri.path ?: "").startsWith("/questify", ignoreCase = true)
+                    (
+                        (dataUri.path ?: "").startsWith("/questify", ignoreCase = true) ||
+                            (dataUri.path ?: "").startsWith("/ClarityOS", ignoreCase = true)
+                        )
                 "livinglife" -> dataUri.host.equals("import", ignoreCase = true)
                 else -> false
             }
@@ -3372,15 +3375,15 @@ FINAL OUTPUT:
                                                     },
                                                     onFontStyleChanged = { fontStyle = it; persistSettings() },
                                                    onFontScalePercentChanged = { fontScalePercent = it.coerceIn(80, 125); persistSettings() },
-                                                   onAppLanguageChanged = { lang ->
-                                                       appLanguage = lang
-                                                       appContext.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                                                           .edit().putString("selected_language", lang).commit()
-                                                       scope.launch {
-                                                           appContext.dataStore.edit { p -> p[Keys.APP_LANGUAGE] = lang }
-                                                           (appContext as android.app.Activity).recreate()
-                                                       }
-                                                   },
+                                                    onAppLanguageChanged = { lang ->
+                                                        appLanguage = lang
+                                                        appContext.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
+                                                            .edit().putString("selected_language", lang).apply()
+                                                        scope.launch {
+                                                            appContext.dataStore.edit { p -> p[Keys.APP_LANGUAGE] = lang }
+                                                            (appContext as android.app.Activity).recreate()
+                                                        }
+                                                    },
                                                    onJournalNameChanged = { journalName = it.take(24).ifBlank { "Journal" }; persistSettings() },
                                                    onTextColorChanged = { textColorOverride = it; persistSettings() },
                                                    backgroundImageUri = backgroundImageUri,
@@ -3730,7 +3733,7 @@ FINAL OUTPUT:
             defaultSkipIntro = onboardingSkipIntroDefault,
             onLanguageChanged = { lang ->
                 appContext.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
-                    .edit().putString("selected_language", lang).commit()
+                    .edit().putString("selected_language", lang).apply()
                 scope.launch {
                     appContext.dataStore.edit { p -> p[Keys.APP_LANGUAGE] = lang }
                     (appContext as android.app.Activity).recreate()
