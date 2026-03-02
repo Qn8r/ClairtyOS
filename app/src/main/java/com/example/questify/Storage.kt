@@ -120,6 +120,9 @@ object Keys {
     val FONT_STYLE = stringPreferencesKey("font_style")
     val FONT_SCALE_PERCENT = intPreferencesKey("font_scale_percent")
     val BACKGROUND_IMAGE_URI = stringPreferencesKey("background_image_uri")
+    val BACKGROUND_VIDEO_URI = stringPreferencesKey("background_video_uri")
+    val BACKGROUND_TYPE = stringPreferencesKey("background_type")
+    val BACKGROUND_VIDEO_MUTED = booleanPreferencesKey("background_video_muted")
     val BACKGROUND_IMAGE_TINT_ENABLED = booleanPreferencesKey("background_image_tint_enabled")
     val BACKGROUND_IMAGE_TRANSPARENCY_PERCENT = intPreferencesKey("background_image_transparency_percent")
     val TEXT_COLOR_ARGB = intPreferencesKey("text_color_argb")
@@ -954,7 +957,10 @@ private fun sanitizeTemplateSettings(settings: TemplateSettings?): TemplateSetti
         dailyResetHour = settings.dailyResetHour.coerceIn(0, 23),
         fontScalePercent = settings.fontScalePercent.coerceIn(80, 125),
         backgroundImageTransparencyPercent = settings.backgroundImageTransparencyPercent?.coerceIn(0, 100),
-        backgroundImageUri = settings.backgroundImageUri?.takeIf { it.isNotBlank() }
+        backgroundImageUri = settings.backgroundImageUri?.takeIf { it.isNotBlank() },
+        backgroundVideoUri = settings.backgroundVideoUri?.takeIf { it.isNotBlank() },
+        backgroundType = settings.backgroundType,
+        backgroundVideoMuted = settings.backgroundVideoMuted
     )
 }
 

@@ -3075,6 +3075,9 @@ fun SettingsScreen(
     fontScalePercent: Int,
     appLanguage: String,
     backgroundImageUri: String?,
+    backgroundVideoUri: String?,
+    backgroundType: String,
+    backgroundVideoMuted: Boolean,
     backgroundImageTransparencyPercent: Int,
     accentTransparencyPercent: Int,
     textTransparencyPercent: Int,
@@ -3131,6 +3134,9 @@ fun SettingsScreen(
     onJournalNameChanged: (String) -> Unit,
     onTextColorChanged: (Color?) -> Unit,
     onBackgroundImageChanged: (String?) -> Unit,
+    onBackgroundVideoUriChanged: (String?) -> Unit,
+    onBackgroundTypeChanged: (String) -> Unit,
+    onBackgroundVideoMutedChanged: (Boolean) -> Unit,
     onBackgroundImageTransparencyPercentChanged: (Int) -> Unit,
     onAccentTransparencyChanged: (Int) -> Unit,
     onTextTransparencyChanged: (Int) -> Unit,
@@ -3174,6 +3180,12 @@ fun SettingsScreen(
             if (uri != null) {
                 runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
                 onBackgroundImageChanged(uri.toString())
+            }
+        }
+        val bgVideoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                onBackgroundVideoUriChanged(uri.toString())
             }
         }
         val advancedTemplateExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
@@ -3268,7 +3280,7 @@ fun SettingsScreen(
         }
         var financeValidationMessage by rememberSaveable { mutableStateOf<String?>(null) }
         val financeCardBringRequester = remember { BringIntoViewRequester() }
-        var backgroundMode by rememberSaveable(backgroundImageUri) { mutableStateOf(if (backgroundImageUri.isNullOrBlank()) "color" else "image") }
+        var backgroundMode by rememberSaveable(backgroundType) { mutableStateOf(backgroundType) }
         val feedbackCategories = remember(
             feedbackBug,
             feedbackUiux,
@@ -4040,20 +4052,40 @@ fun SettingsScreen(
                                             selected = backgroundMode == "image",
                                             onClick = {
                                                 backgroundMode = "image"
+                                                onBackgroundTypeChanged("image")
                                                 onAppBackgroundColorChanged(null)
                                             },
                                             label = { Text(stringResource(R.string.l10n_image)) }
                                         )
                                         FilterChip(
+                                            selected = backgroundMode == "gif",
+                                            onClick = {
+                                                backgroundMode = "gif"
+                                                onBackgroundTypeChanged("gif")
+                                                onAppBackgroundColorChanged(null)
+                                            },
+                                            label = { Text("GIF") }
+                                        )
+                                        FilterChip(
+                                            selected = backgroundMode == "video",
+                                            onClick = {
+                                                backgroundMode = "video"
+                                                onBackgroundTypeChanged("video")
+                                                onAppBackgroundColorChanged(null)
+                                            },
+                                            label = { Text("Video") }
+                                        )
+                                        FilterChip(
                                             selected = backgroundMode == "color",
                                             onClick = {
                                                 backgroundMode = "color"
+                                                onBackgroundTypeChanged("color")
                                                 onBackgroundImageChanged(null)
                                             },
                                             label = { Text(stringResource(R.string.l10n_color)) }
                                         )
                                     }
-                                    if (backgroundMode == "image") {
+                                    if (backgroundMode == "image" || backgroundMode == "gif") {
                                         Row(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -4072,9 +4104,33 @@ fun SettingsScreen(
                                                 fontSize = 11.sp
                                             )
                                         }
+                                    } else if (backgroundMode == "video") {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(top = 4.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.WarningAmber,
+                                                contentDescription = null,
+                                                tint = Color(0xFFE57373),
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text("Video backgrounds can consume battery and reduce performance.",
+                                                color = OnCardText.copy(alpha = 0.72f),
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                        SettingRow(
+                                            title = "Mute video background",
+                                            value = backgroundVideoMuted,
+                                            onChange = onBackgroundVideoMutedChanged
+                                        )
                                     }
                                     Spacer(Modifier.height(10.dp))
-                                    if (backgroundMode == "image") {
+                                    if (backgroundMode != "color") {
                                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                             Box(
                                                 modifier = Modifier
@@ -4082,20 +4138,34 @@ fun SettingsScreen(
                                                     .clip(RoundedCornerShape(12.dp))
                                                     .background(SubtlePanel)
                                                     .border(1.dp, OnCardText.copy(alpha = 0.18f), RoundedCornerShape(12.dp))
-                                                    .clickable { bgPicker.launch(arrayOf("image/*")) },
+                                                    .clickable {
+                                                        if (backgroundMode == "video") bgVideoPicker.launch(arrayOf("video/*"))
+                                                        else bgPicker.launch(arrayOf("image/*"))
+                                                    },
                                                 contentAlignment = Alignment.Center
                                             ) {
-                                                if (!backgroundImageUri.isNullOrBlank()) {
-                                                    AsyncImage(model = backgroundImageUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                                if (backgroundMode == "video") {
+                                                    if (!backgroundVideoUri.isNullOrBlank()) {
+                                                        Icon(Icons.Default.Movie, null, tint = OnCardText.copy(alpha = 0.7f))
+                                                    } else {
+                                                        Icon(Icons.Default.AddPhotoAlternate, null, tint = OnCardText.copy(alpha = 0.7f))
+                                                    }
                                                 } else {
-                                                    Icon(Icons.Default.AddPhotoAlternate, null, tint = OnCardText.copy(alpha = 0.7f))
+                                                    if (!backgroundImageUri.isNullOrBlank()) {
+                                                        AsyncImage(model = backgroundImageUri, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                                                    } else {
+                                                        Icon(Icons.Default.AddPhotoAlternate, null, tint = OnCardText.copy(alpha = 0.7f))
+                                                    }
                                                 }
                                             }
                                             Column(modifier = Modifier.weight(1f)) {
-                                                Text(if (backgroundImageUri.isNullOrBlank()) stringResource(R.string.settings_no_bg) else stringResource(R.string.settings_bg_set), color = OnCardText, fontSize = 12.sp)
-                                                Text(if (backgroundImageUri.isNullOrBlank()) stringResource(R.string.settings_tap_to_pick) else stringResource(R.string.settings_tap_to_replace), color = OnCardText.copy(alpha = 0.6f), fontSize = 11.sp)
+                                                val uriToCheck = if (backgroundMode == "video") backgroundVideoUri else backgroundImageUri
+                                                Text(if (uriToCheck.isNullOrBlank()) stringResource(R.string.settings_no_bg) else stringResource(R.string.settings_bg_set), color = OnCardText, fontSize = 12.sp)
+                                                Text(if (uriToCheck.isNullOrBlank()) stringResource(R.string.settings_tap_to_pick) else stringResource(R.string.settings_tap_to_replace), color = OnCardText.copy(alpha = 0.6f), fontSize = 11.sp)
                                             }
-                                            if (!backgroundImageUri.isNullOrBlank()) {
+                                            if (backgroundMode == "video" && !backgroundVideoUri.isNullOrBlank()) {
+                                                TextButton(onClick = { SoundManager.playClick(); onBackgroundVideoUriChanged(null) }) { Text(stringResource(R.string.clear), color = Color(0xFFE57373)) }
+                                            } else if (backgroundMode != "video" && !backgroundImageUri.isNullOrBlank()) {
                                                 TextButton(onClick = { SoundManager.playClick(); onBackgroundImageChanged(null) }) { Text(stringResource(R.string.clear), color = Color(0xFFE57373)) }
                                             }
                                         }
@@ -4118,7 +4188,7 @@ fun SettingsScreen(
                                             }
                                         }
                                     }
-                                    if (backgroundMode == "image") {
+                                    if (backgroundMode != "color") {
                                         Spacer(Modifier.height(8.dp))
                                         Row(
                                             modifier = Modifier.fillMaxWidth(),

@@ -59,6 +59,9 @@ data class TemplateSettings(
     val fontStyle: AppFontStyle = AppFontStyle.DEFAULT,
     val fontScalePercent: Int = 100,
     val backgroundImageUri: String? = null,
+    val backgroundVideoUri: String? = null,
+    val backgroundType: String = "color", // color, image, video, gif
+    val backgroundVideoMuted: Boolean = true,
     val backgroundImageTintEnabled: Boolean = true,
     val backgroundImageTransparencyPercent: Int? = null,
     val accentTransparencyPercent: Int? = null,

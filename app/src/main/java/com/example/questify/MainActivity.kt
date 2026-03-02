@@ -63,7 +63,19 @@ import androidx.compose.ui.unit.LayoutDirection
 import kotlin.math.abs
 import androidx.compose.foundation.shape.RoundedCornerShape
 import coil.compose.AsyncImage
+import coil.ImageLoader
+import coil.decode.ImageDecoderDecoder
+import coil.decode.GifDecoder
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 class MainActivity : ComponentActivity() {
     override fun attachBaseContext(newBase: Context) {
         val lang = newBase.getSharedPreferences("app_prefs", Context.MODE_PRIVATE)
@@ -188,6 +200,9 @@ fun AppRoot(appContext: Context) {
     var fontScalePercent by remember { mutableIntStateOf(100) }
     var appLanguage by remember { mutableStateOf("system") }
     var backgroundImageUri by remember { mutableStateOf<String?>(null) }
+    var backgroundVideoUri by remember { mutableStateOf<String?>(null) }
+    var backgroundType by remember { mutableStateOf("color") }
+    var backgroundVideoMuted by remember { mutableStateOf(true) }
     var backgroundImageTintEnabled by remember { mutableStateOf(true) }
     var backgroundImageTransparencyPercent by remember { mutableIntStateOf(78) }
     var accentTransparencyPercent by remember { mutableIntStateOf(0) }
@@ -355,6 +370,8 @@ fun AppRoot(appContext: Context) {
             fontStyle = fontStyle,
             fontScalePercent = fontScalePercent,
             backgroundImageUri = backgroundImageUri,
+            backgroundVideoUri = backgroundVideoUri,
+            backgroundType = backgroundType,
             backgroundImageTintEnabled = backgroundImageTintEnabled,
             backgroundImageTransparencyPercent = backgroundImageTransparencyPercent.coerceIn(0, 100),
             accentTransparencyPercent = accentTransparencyPercent.coerceIn(0, 100),
@@ -411,6 +428,9 @@ fun AppRoot(appContext: Context) {
         fontStyle = runCatching { settings.fontStyle }.getOrDefault(AppFontStyle.DEFAULT)
         fontScalePercent = settings.fontScalePercent.coerceIn(80, 125)
         backgroundImageUri = runCatching { settings.backgroundImageUri }.getOrNull()
+        backgroundVideoUri = runCatching { settings.backgroundVideoUri }.getOrNull()
+        backgroundType = runCatching { settings.backgroundType }.getOrDefault("color")
+        backgroundVideoMuted = runCatching { settings.backgroundVideoMuted }.getOrDefault(true)
         backgroundImageTintEnabled = runCatching { settings.backgroundImageTintEnabled }.getOrDefault(true)
         backgroundImageTransparencyPercent = (settings.backgroundImageTransparencyPercent ?: backgroundImageTransparencyPercent).coerceIn(0, 100)
         accentTransparencyPercent = (settings.accentTransparencyPercent ?: accentTransparencyPercent).coerceIn(0, 100)
@@ -696,6 +716,9 @@ fun AppRoot(appContext: Context) {
         dump["settings_theme"] = appTheme.name
         dump["settings_accent"] = accent.toArgbCompat().toString()
         dump["settings_bg"] = backgroundImageUri.orEmpty()
+        dump["settings_bgVideo"] = backgroundVideoUri.orEmpty()
+        dump["settings_bgType"] = backgroundType
+        dump["settings_bgVideoMuted"] = backgroundVideoMuted.toString()
         dump["settings_bgTransparency"] = backgroundImageTransparencyPercent.toString()
         dump["settings_bgColor"] = appBackgroundColorOverride?.toArgbCompat()?.toString().orEmpty()
         dump["settings_chromeColor"] = chromeBackgroundColorOverride?.toArgbCompat()?.toString().orEmpty()
@@ -747,6 +770,9 @@ fun AppRoot(appContext: Context) {
         appTheme = runCatching { AppTheme.valueOf(dump["settings_theme"].orEmpty()) }.getOrDefault(appTheme)
         dump["settings_accent"]?.toIntOrNull()?.let { accent = Color(it) }
         backgroundImageUri = dump["settings_bg"].orEmpty().ifBlank { null }
+        backgroundVideoUri = dump["settings_bgVideo"].orEmpty().ifBlank { null }
+        backgroundType = dump["settings_bgType"].orEmpty().ifBlank { backgroundType }
+        backgroundVideoMuted = getBool("settings_bgVideoMuted", backgroundVideoMuted)
         backgroundImageTransparencyPercent = getInt("settings_bgTransparency", backgroundImageTransparencyPercent).coerceIn(0, 100)
         appBackgroundColorOverride = dump["settings_bgColor"]?.toIntOrNull()?.let { Color(it) }
         chromeBackgroundColorOverride = dump["settings_chromeColor"]?.toIntOrNull()?.let { Color(it) }
@@ -795,6 +821,9 @@ fun AppRoot(appContext: Context) {
                 p[Keys.NEON_FLOW_SPEED] = neonFlowSpeed.coerceIn(0, 2)
                 p[Keys.NEON_GLOW_PALETTE] = neonGlowPalette
                 p[Keys.BACKGROUND_IMAGE_URI] = backgroundImageUri.orEmpty()
+                p[Keys.BACKGROUND_VIDEO_URI] = backgroundVideoUri.orEmpty()
+                p[Keys.BACKGROUND_TYPE] = backgroundType
+                p[Keys.BACKGROUND_VIDEO_MUTED] = backgroundVideoMuted
                 p[Keys.BACKGROUND_IMAGE_TINT_ENABLED] = backgroundImageTintEnabled
                 p[Keys.BACKGROUND_IMAGE_TRANSPARENCY_PERCENT] = backgroundImageTransparencyPercent.coerceIn(0, 100)
                 p[Keys.TRANSPARENCY_ACCENT] = accentTransparencyPercent.coerceIn(0, 100)
@@ -998,6 +1027,9 @@ fun AppRoot(appContext: Context) {
                 p[Keys.FONT_STYLE] = fontStyle.name
                 p[Keys.FONT_SCALE_PERCENT] = fontScalePercent.coerceIn(80, 125)
                 p[Keys.BACKGROUND_IMAGE_URI] = backgroundImageUri.orEmpty()
+                p[Keys.BACKGROUND_VIDEO_URI] = backgroundVideoUri.orEmpty()
+                p[Keys.BACKGROUND_TYPE] = backgroundType
+                p[Keys.BACKGROUND_VIDEO_MUTED] = backgroundVideoMuted
                 p[Keys.BACKGROUND_IMAGE_TINT_ENABLED] = backgroundImageTintEnabled
                 p[Keys.BACKGROUND_IMAGE_TRANSPARENCY_PERCENT] = backgroundImageTransparencyPercent.coerceIn(0, 100)
                 p[Keys.TRANSPARENCY_ACCENT] = accentTransparencyPercent.coerceIn(0, 100)
@@ -1173,6 +1205,9 @@ fun AppRoot(appContext: Context) {
         fontStyle = runCatching { AppFontStyle.valueOf(prefs[Keys.FONT_STYLE] ?: AppFontStyle.DEFAULT.name) }.getOrDefault(AppFontStyle.DEFAULT)
         fontScalePercent = (prefs[Keys.FONT_SCALE_PERCENT] ?: 100).coerceIn(80, 125)
         backgroundImageUri = prefs[Keys.BACKGROUND_IMAGE_URI].orEmpty().ifBlank { null }
+        backgroundVideoUri = prefs[Keys.BACKGROUND_VIDEO_URI].orEmpty().ifBlank { null }
+        backgroundType = prefs[Keys.BACKGROUND_TYPE].orEmpty().ifBlank { "color" }
+        backgroundVideoMuted = prefs[Keys.BACKGROUND_VIDEO_MUTED] ?: true
         backgroundImageTintEnabled = prefs[Keys.BACKGROUND_IMAGE_TINT_ENABLED] ?: true
         backgroundImageTransparencyPercent = (prefs[Keys.BACKGROUND_IMAGE_TRANSPARENCY_PERCENT] ?: 78).coerceIn(0, 100)
         accentTransparencyPercent = (prefs[Keys.TRANSPARENCY_ACCENT] ?: 0).coerceIn(0, 100)
@@ -1652,7 +1687,7 @@ FINAL OUTPUT:
 """.trimIndent()
 
     fun buildAdvancedTemplateStarterJson(): String {
-        val starterSettings = currentTemplateSettings().copy(backgroundImageUri = null)
+        val starterSettings = currentTemplateSettings().copy(backgroundImageUri = null, backgroundVideoUri = null, backgroundType = "color")
         val starter = AdvancedTemplateFile(
             template_name = "AI Generated Template",
             app_theme = appTheme.name,
@@ -3262,6 +3297,15 @@ FINAL OUTPUT:
                                                     onOpenSettings = { screen = Screen.SETTINGS }
                                                 )
                 }
+                val onBackgroundImageTransparencyPercentChangedRef: (Int) -> Unit = { backgroundImageTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
+                val onAccentTransparencyChangedRef: (Int) -> Unit = { accentTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
+                val onTextTransparencyChangedRef: (Int) -> Unit = { textTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
+                val onAppBgTransparencyChangedRef: (Int) -> Unit = { appBgTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
+                val onChromeBgTransparencyChangedRef: (Int) -> Unit = { chromeBgTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
+                val onCardBgTransparencyChangedRef: (Int) -> Unit = { cardBgTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
+                val onJournalPageTransparencyChangedRef: (Int) -> Unit = { journalPageTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
+                val onJournalAccentTransparencyChangedRef: (Int) -> Unit = { journalAccentTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
+                val onButtonTransparencyChangedRef: (Int) -> Unit = { buttonTransparencyPercent = it.coerceIn(0, 100); persistSettings() }
                 val settingsScreenContent: @Composable () -> Unit = {
                     SettingsScreen(
                                                    modifier = Modifier.fillMaxSize().padding(padding),
@@ -3387,22 +3431,34 @@ FINAL OUTPUT:
                                                    onJournalNameChanged = { journalName = it.take(24).ifBlank { "Journal" }; persistSettings() },
                                                    onTextColorChanged = { textColorOverride = it; persistSettings() },
                                                    backgroundImageUri = backgroundImageUri,
+                                                   backgroundVideoUri = backgroundVideoUri,
+                                                   backgroundType = backgroundType,
                                                    onBackgroundImageChanged = {
                                                        backgroundImageUri = it
                                                        persistSettings()
                                                    },
-                                                   onBackgroundImageTransparencyPercentChanged = {
-                                                       backgroundImageTransparencyPercent = it.coerceIn(0, 100)
+                                                   onBackgroundVideoUriChanged = {
+                                                       backgroundVideoUri = it
                                                        persistSettings()
                                                    },
-                                                   onAccentTransparencyChanged = { accentTransparencyPercent = it.coerceIn(0, 100); persistSettings() },
-                                                   onTextTransparencyChanged = { textTransparencyPercent = it.coerceIn(0, 100); persistSettings() },
-                                                   onAppBgTransparencyChanged = { appBgTransparencyPercent = it.coerceIn(0, 100); persistSettings() },
-                                                   onChromeBgTransparencyChanged = { chromeBgTransparencyPercent = it.coerceIn(0, 100); persistSettings() },
-                                                   onCardBgTransparencyChanged = { cardBgTransparencyPercent = it.coerceIn(0, 100); persistSettings() },
-                                                   onJournalPageTransparencyChanged = { journalPageTransparencyPercent = it.coerceIn(0, 100); persistSettings() },
-                                                   onJournalAccentTransparencyChanged = { journalAccentTransparencyPercent = it.coerceIn(0, 100); persistSettings() },
-                                                   onButtonTransparencyChanged = { buttonTransparencyPercent = it.coerceIn(0, 100); persistSettings() },
+                                                   onBackgroundTypeChanged = {
+                                                       backgroundType = it
+                                                       persistSettings()
+                                                   },
+                                                   backgroundVideoMuted = backgroundVideoMuted,
+                                                   onBackgroundVideoMutedChanged = {
+                                                       backgroundVideoMuted = it
+                                                       persistSettings()
+                                                   },
+                                                   onBackgroundImageTransparencyPercentChanged = onBackgroundImageTransparencyPercentChangedRef,
+                                                   onAccentTransparencyChanged = onAccentTransparencyChangedRef,
+                                                   onTextTransparencyChanged = onTextTransparencyChangedRef,
+                                                   onAppBgTransparencyChanged = onAppBgTransparencyChangedRef,
+                                                   onChromeBgTransparencyChanged = onChromeBgTransparencyChangedRef,
+                                                   onCardBgTransparencyChanged = onCardBgTransparencyChangedRef,
+                                                   onJournalPageTransparencyChanged = onJournalPageTransparencyChangedRef,
+                                                   onJournalAccentTransparencyChanged = onJournalAccentTransparencyChangedRef,
+                                                   onButtonTransparencyChanged = onButtonTransparencyChangedRef,
                                                    onAppBackgroundColorChanged = { appBackgroundColorOverride = it; persistSettings() },
                                                    onChromeBackgroundColorChanged = { chromeBackgroundColorOverride = it; persistSettings() },
                                                    onCardColorChanged = { cardColorOverride = it; persistSettings() },
@@ -3492,19 +3548,90 @@ FINAL OUTPUT:
                                                )
                 }
                 val renderScreen: @Composable (Screen) -> Unit = { target ->
+                    val appCtx = androidx.compose.ui.platform.LocalContext.current
+                    val imageLoader = remember {
+                        ImageLoader.Builder(appCtx)
+                            .components {
+                                if (Build.VERSION.SDK_INT >= 28) {
+                                    add(ImageDecoderDecoder.Factory())
+                                } else {
+                                    add(GifDecoder.Factory())
+                                }
+                            }
+                            .build()
+                    }
+                    val exoPlayer = remember {
+                        ExoPlayer.Builder(appCtx).build().apply {
+                            repeatMode = Player.REPEAT_MODE_ALL
+                        }
+                    }
+                    LaunchedEffect(backgroundVideoMuted) {
+                        exoPlayer.volume = if (backgroundVideoMuted) 0f else 1f
+                    }
+                    val lifecycleOwner = LocalLifecycleOwner.current
+                    LaunchedEffect(backgroundVideoUri, backgroundType) {
+                       if (backgroundType == "video" && !backgroundVideoUri.isNullOrBlank()) {
+                           exoPlayer.setMediaItem(MediaItem.fromUri(backgroundVideoUri!!))
+                           exoPlayer.prepare()
+                           if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                               exoPlayer.playWhenReady = true
+                           }
+                       } else {
+                           exoPlayer.stop()
+                       }
+                    }
+                    DisposableEffect(lifecycleOwner, backgroundVideoUri, backgroundType) {
+                        val observer = LifecycleEventObserver { _, event ->
+                            if (backgroundType == "video" && !backgroundVideoUri.isNullOrBlank()) {
+                                if (event == Lifecycle.Event.ON_RESUME) {
+                                    exoPlayer.play()
+                                } else if (event == Lifecycle.Event.ON_PAUSE) {
+                                    exoPlayer.pause()
+                                }
+                            }
+                        }
+                        lifecycleOwner.lifecycle.addObserver(observer)
+                        onDispose {
+                            lifecycleOwner.lifecycle.removeObserver(observer)
+                        }
+                    }
+                    DisposableEffect(Unit) {
+                       onDispose {
+                           exoPlayer.release()
+                       }
+                    }
+
                     CompositionLocalProvider(LocalHeaderThemeToggle provides {
                         settingsExpandedSection = "appearance"
                         screen = Screen.SETTINGS
                         persistSettings()
                     }) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        if (!backgroundImageUri.isNullOrBlank()) {
+                        if (backgroundType == "video" && !backgroundVideoUri.isNullOrBlank()) {
+                            AndroidView(
+                                factory = { ctx ->
+                                    PlayerView(ctx).apply {
+                                        player = exoPlayer
+                                        useController = false
+                                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                                    }
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else if ((backgroundType == "image" || backgroundType == "gif") && !backgroundImageUri.isNullOrBlank()) {
                             AsyncImage(
                                 model = backgroundImageUri,
+                                imageLoader = imageLoader,
                                 contentDescription = null,
                                 modifier = Modifier.fillMaxSize(),
                                 contentScale = ContentScale.Crop
                             )
+                        }
+
+                        if (backgroundType != "color" && (
+                            (backgroundType == "video" && !backgroundVideoUri.isNullOrBlank()) || 
+                            ((backgroundType == "image" || backgroundType == "gif") && !backgroundImageUri.isNullOrBlank())
+                        )) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
@@ -3519,7 +3646,7 @@ FINAL OUTPUT:
                         }
                         Surface(
                             modifier = Modifier.fillMaxSize(),
-                            color = if (backgroundImageUri.isNullOrBlank()) {
+                            color = if (backgroundType == "color" || (backgroundType == "video" && backgroundVideoUri.isNullOrBlank()) || ((backgroundType == "image" || backgroundType == "gif") && backgroundImageUri.isNullOrBlank())) {
                                 themeBg.copy(alpha = appBgAlpha)
                             } else {
                                 themeBg.copy(alpha = appBgAlpha * (1f - (backgroundImageTransparencyPercent.coerceIn(0, 100) / 100f)))
